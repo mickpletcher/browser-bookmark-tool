@@ -124,17 +124,17 @@ Acceptance criteria:
 - Safari support is implemented as a separate macOS adapter and does not weaken Windows Chrome and Edge behavior.
 - Tests cover supported macOS and Safari versions, malformed exports, duplicate handling, iCloud warnings, backup integrity, and failed writes.
 
-### FUT-012: Scheduled-run health and failure notifications
+### FUT-014: Notification delivery verification and provider templates
 
-Add privacy-safe health history and optional failure notifications for unattended local scheduler runs.
+Add a safe delivery test and reviewed local notifier examples for scheduled-run failure records.
 
 Acceptance criteria:
 
-- Health records contain only operation status, mapping names, counts, duration, process names, and error categories.
-- Bookmark titles, URLs, browser profile paths, backup paths, configuration contents, and credentials are excluded.
-- Repeated identical failures are rate-limited so a persistent browser or configuration problem does not generate notification spam.
-- Notification delivery is optional and disabled by default.
-- Tests cover successful runs, blocked synchronization, stale locks, repeated failures, recovery, and notification redaction.
+- A no-bookmark test command sends a synthetic allowlisted failure record through the configured notification command.
+- Provider templates accept the JSON record through standard input and do not require credentials in command arguments or repository files.
+- Delivery timeouts, missing executables, and nonzero notifier exits produce a privacy-safe diagnostic without exposing command contents or credentials.
+- Testing notification delivery does not access browser profiles, create backups, change bookmarks, or alter failure suppression history.
+- Tests cover successful delivery, timeout, missing command, nonzero exit, and payload redaction.
 
 ## Priority 3: Later
 

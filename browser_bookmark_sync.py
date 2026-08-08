@@ -33,6 +33,19 @@ MERGE_STRATEGIES = ("chrome-wins", "edge-wins", "preserve-both", "merge-folders"
 AUTOMATION_SCHEMA_VERSION = 1
 AUTOMATION_OPERATIONS = ("backup", "sync", "dry-run")
 AUTOMATION_BROWSER_BEHAVIORS = ("block", "close")
+AUTOMATION_HEALTH_LIMIT = 100
+AUTOMATION_HEALTH_MAX_LIMIT = 1000
+AUTOMATION_ERROR_CATEGORIES = (
+    "none",
+    "active_lock",
+    "browser_running",
+    "configuration",
+    "profile_missing",
+    "bookmark_json",
+    "process_detection",
+    "backup_destination",
+    "automation",
+)
 BACKUP_NAME_PATTERN = re.compile(
     r"^(?P<prefix>Chrome|Edge|Bookmarks|Manifest)_"
     r"(?P<stamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:_\d{6})?)"
@@ -148,6 +161,10 @@ class AutomationConfig:
     result_file: Path
     lock_file: Path
     lock_timeout_minutes: int
+    health_file: Path
+    health_history_limit: int
+    notifications_enabled: bool
+    notification_command: tuple[str, ...]
 
 
 def config_relative_path(value: str, source: Path) -> Path:
@@ -204,18 +221,43 @@ def load_automation_config(path: Path) -> AutomationConfig:
 
     result_value = document.get("result_file", "browser-bookmark-automation-result.json")
     lock_value = document.get("lock_file", "browser-bookmark-automation.lock")
+    health_value = document.get("health_file", "browser-bookmark-automation-health.json")
     if not isinstance(result_value, str) or not result_value.strip():
         raise RuntimeError("Automation result_file must be a non-empty path string.")
     if not isinstance(lock_value, str) or not lock_value.strip():
         raise RuntimeError("Automation lock_file must be a non-empty path string.")
+    if not isinstance(health_value, str) or not health_value.strip():
+        raise RuntimeError("Automation health_file must be a non-empty path string.")
     result_file = config_relative_path(result_value, source)
     lock_file = config_relative_path(lock_value, source)
-    if result_file == lock_file:
-        raise RuntimeError("Automation result_file and lock_file must be different paths.")
+    health_file = config_relative_path(health_value, source)
+    if len({result_file, lock_file, health_file}) != 3:
+        raise RuntimeError("Automation result_file, lock_file, and health_file must be different paths.")
 
     lock_timeout = document.get("lock_timeout_minutes", 180)
     if isinstance(lock_timeout, bool) or not isinstance(lock_timeout, int) or not 5 <= lock_timeout <= 1440:
         raise RuntimeError("Automation lock_timeout_minutes must be from 5 to 1440.")
+
+    health_history_limit = document.get("health_history_limit", AUTOMATION_HEALTH_LIMIT)
+    if (
+        isinstance(health_history_limit, bool)
+        or not isinstance(health_history_limit, int)
+        or not 1 <= health_history_limit <= AUTOMATION_HEALTH_MAX_LIMIT
+    ):
+        raise RuntimeError(
+            f"Automation health_history_limit must be from 1 to {AUTOMATION_HEALTH_MAX_LIMIT}."
+        )
+    notifications_enabled = document.get("notifications_enabled", False)
+    if not isinstance(notifications_enabled, bool):
+        raise RuntimeError("Automation notifications_enabled must be true or false.")
+    notification_command_value = document.get("notification_command", [])
+    if (
+        not isinstance(notification_command_value, list)
+        or any(not isinstance(value, str) or not value.strip() for value in notification_command_value)
+    ):
+        raise RuntimeError("Automation notification_command must be a list of non-empty strings.")
+    if notifications_enabled and not notification_command_value:
+        raise RuntimeError("Automation notification_command is required when notifications are enabled.")
 
     return AutomationConfig(
         source=source,
@@ -231,6 +273,10 @@ def load_automation_config(path: Path) -> AutomationConfig:
         result_file=result_file,
         lock_file=lock_file,
         lock_timeout_minutes=lock_timeout,
+        health_file=health_file,
+        health_history_limit=health_history_limit,
+        notifications_enabled=notifications_enabled,
+        notification_command=tuple(notification_command_value),
     )
 
 
@@ -240,6 +286,7 @@ class AutomationRunLock:
         self.stale_seconds = stale_minutes * 60
         self.token = str(uuid.uuid4())
         self.acquired = False
+        self.stale_replaced = False
 
     def __enter__(self) -> AutomationRunLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -259,6 +306,7 @@ class AutomationRunLock:
                 except FileNotFoundError:
                     continue
                 stale.unlink(missing_ok=True)
+                self.stale_replaced = True
                 continue
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
                 json.dump(
@@ -1123,6 +1171,8 @@ def safe_automation_error(exc: Exception) -> str:
         return message
     if "already active" in folded or "automation lock" in folded:
         return "Another browser bookmark automation run is already active."
+    if "process detection" in folded:
+        return "Browser process detection is unavailable."
     if "browser process" in folded or "synchronization blocked" in folded:
         detected = [process for process in BROWSER_PROCESS_NAMES if process in folded]
         suffix = f": {', '.join(detected)}" if detected else ""
@@ -1136,6 +1186,204 @@ def safe_automation_error(exc: Exception) -> str:
     if "profile mapping" in folded:
         return "The private profile mapping configuration is invalid."
     return "Automation failed. Review the private local operation log for details."
+
+
+HEALTH_COUNT_FIELDS = (
+    "mapping_total",
+    "mapping_succeeded",
+    "mapping_failed",
+    "chrome_bookmarks",
+    "edge_bookmarks",
+    "merged_bookmarks",
+    "duplicates_removed",
+    "folders_added",
+    "folders_reordered",
+    "backups_created",
+    "html_exports_created",
+    "manifests_validated",
+    "mappings_synchronized",
+    "stale_locks_replaced",
+)
+
+
+def automation_error_category(error: str) -> str:
+    folded = error.casefold()
+    if "already active" in folded or "automation lock" in folded:
+        return "active_lock"
+    if "blocked by running browser" in folded:
+        return "browser_running"
+    if "profile mapping" in folded or "automation configuration" in folded or "unknown automation mapping" in folded:
+        return "configuration"
+    if "does not contain a bookmarks file" in folded:
+        return "profile_missing"
+    if "not valid json" in folded:
+        return "bookmark_json"
+    if "process detection" in folded:
+        return "process_detection"
+    if "backup destination" in folded:
+        return "backup_destination"
+    return "automation"
+
+
+def sanitize_health_record(record: dict[str, Any]) -> dict[str, Any]:
+    counts = record.get("counts", {})
+    if not isinstance(counts, dict):
+        counts = {}
+    mappings = record.get("mappings", [])
+    if not isinstance(mappings, list):
+        mappings = []
+    processes = record.get("processes", [])
+    if not isinstance(processes, list):
+        processes = []
+    try:
+        duration_seconds = max(0.0, float(record.get("duration_seconds", 0.0)))
+    except (TypeError, ValueError):
+        duration_seconds = 0.0
+    return {
+        "operation": record.get("operation") if record.get("operation") in AUTOMATION_OPERATIONS else "unknown",
+        "status": record.get("status") if record.get("status") in ("success", "failed", "blocked") else "failed",
+        "mappings": [name for name in mappings if isinstance(name, str)],
+        "counts": {
+            name: value
+            for name in HEALTH_COUNT_FIELDS
+            if isinstance((value := counts.get(name)), int) and not isinstance(value, bool) and value >= 0
+        },
+        "duration_seconds": duration_seconds,
+        "processes": [name for name in BROWSER_PROCESS_NAMES if name in processes],
+        "error_category": (
+            record.get("error_category")
+            if record.get("error_category") in AUTOMATION_ERROR_CATEGORIES
+            else "automation"
+        ),
+    }
+
+
+def load_health_records(path: Path) -> list[dict[str, Any]]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, json.JSONDecodeError):
+        return []
+    records = document.get("records", []) if isinstance(document, dict) else []
+    if not isinstance(records, list):
+        return []
+    return [sanitize_health_record(record) for record in records if isinstance(record, dict)]
+
+
+def automation_health_record(
+    config: AutomationConfig,
+    document: dict[str, Any],
+    *,
+    stale_lock_replaced: bool = False,
+) -> dict[str, Any]:
+    results = document.get("mappings", [])
+    if not isinstance(results, list):
+        results = []
+    result_names = [
+        result.get("name")
+        for result in results
+        if isinstance(result, dict) and isinstance(result.get("name"), str) and result.get("name") != "configuration"
+    ]
+    mapping_names = result_names or list(config.mappings)
+
+    counts = {name: 0 for name in HEALTH_COUNT_FIELDS}
+    counts["mapping_total"] = len(mapping_names)
+    numeric_fields = {
+        "chrome_count": "chrome_bookmarks",
+        "edge_count": "edge_bookmarks",
+        "merged_count": "merged_bookmarks",
+        "duplicates_removed": "duplicates_removed",
+        "folders_added": "folders_added",
+        "folders_reordered": "folders_reordered",
+    }
+    boolean_fields = {
+        "backup_created": "backups_created",
+        "html_created": "html_exports_created",
+        "manifest_validated": "manifests_validated",
+        "synchronized": "mappings_synchronized",
+    }
+    processes: set[str] = set()
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        if result.get("status") == "success":
+            counts["mapping_succeeded"] += 1
+        elif result.get("status") == "failed":
+            counts["mapping_failed"] += 1
+        for source, destination in numeric_fields.items():
+            value = result.get(source)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                counts[destination] += value
+        for source, destination in boolean_fields.items():
+            counts[destination] += int(result.get(source) is True)
+        closed = result.get("browsers_closed", [])
+        if isinstance(closed, list):
+            processes.update(name for name in closed if name in BROWSER_PROCESS_NAMES)
+    counts["stale_locks_replaced"] = int(stale_lock_replaced)
+
+    error = document.get("error", "")
+    category = "none" if document.get("status") == "success" else automation_error_category(str(error))
+    if category in ("active_lock", "browser_running"):
+        status = "blocked"
+    else:
+        status = "success" if document.get("status") == "success" else "failed"
+    folded_error = str(error).casefold()
+    processes.update(name for name in BROWSER_PROCESS_NAMES if name in folded_error)
+    return sanitize_health_record(
+        {
+            "operation": config.operation,
+            "status": status,
+            "mappings": mapping_names,
+            "counts": counts,
+            "duration_seconds": document.get("duration_seconds", 0.0),
+            "processes": sorted(processes),
+            "error_category": category,
+        }
+    )
+
+
+def failure_signature(record: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        record["status"],
+        record["operation"],
+        tuple(record["mappings"]),
+        tuple(record["processes"]),
+        record["error_category"],
+    )
+
+
+def deliver_failure_notification(command: tuple[str, ...], record: dict[str, Any]) -> bool:
+    try:
+        completed = subprocess.run(
+            list(command),
+            input=json.dumps(sanitize_health_record(record)),
+            capture_output=True,
+            text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            check=False,
+        )
+    except OSError:
+        return False
+    return completed.returncode == 0
+
+
+def record_automation_health(config: AutomationConfig, record: dict[str, Any]) -> None:
+    sanitized = sanitize_health_record(record)
+    previous = load_health_records(config.health_file)
+    write_json_atomic(
+        config.health_file,
+        {
+            "schema_version": AUTOMATION_SCHEMA_VERSION,
+            "kind": "automation-health-history",
+            "records": (previous + [sanitized])[-config.health_history_limit :],
+        },
+    )
+    if not config.notifications_enabled or sanitized["status"] == "success":
+        return
+    if previous and previous[-1]["status"] != "success" and failure_signature(previous[-1]) == failure_signature(sanitized):
+        return
+    deliver_failure_notification(config.notification_command, sanitized)
 
 
 def automation_readiness(config: AutomationConfig) -> dict[str, Any]:
@@ -1166,6 +1414,8 @@ def automation_readiness(config: AutomationConfig) -> dict[str, Any]:
         errors.append("The automation result destination is not writable.")
     if not writable_existing_parent(config.lock_file):
         errors.append("The automation lock destination is not writable.")
+    if not writable_existing_parent(config.health_file):
+        errors.append("The automation health destination is not writable.")
 
     if config.lock_file.exists():
         age = time.time() - config.lock_file.stat().st_mtime
@@ -1258,7 +1508,28 @@ def run_automation(config: AutomationConfig) -> tuple[int, dict[str, Any]]:
         "html_created": False,
         "manifest_validated": False,
     }
-    with AutomationRunLock(config.lock_file, config.lock_timeout_minutes):
+    run_lock = AutomationRunLock(config.lock_file, config.lock_timeout_minutes)
+    try:
+        run_lock.__enter__()
+    except (OSError, RuntimeError) as exc:
+        completed_at = dt.datetime.now(dt.timezone.utc)
+        error = safe_automation_error(exc)
+        document = {
+            "schema_version": AUTOMATION_SCHEMA_VERSION,
+            "kind": "automation-result",
+            "status": "failed",
+            "operation": config.operation,
+            "started_at": started_at.isoformat(),
+            "completed_at": completed_at.isoformat(),
+            "duration_seconds": round(time.monotonic() - started_timer, 3),
+            "exit_code": 1,
+            "mappings": [],
+            "error": error,
+        }
+        record_automation_health(config, automation_health_record(config, document))
+        return 1, document
+
+    try:
         try:
             mappings = selected_automation_mappings(config)
             for mapping in mappings:
@@ -1327,6 +1598,12 @@ def run_automation(config: AutomationConfig) -> tuple[int, dict[str, Any]]:
         if error:
             document["error"] = error
         write_json_atomic(config.result_file, document)
+        record_automation_health(
+            config,
+            automation_health_record(config, document, stale_lock_replaced=run_lock.stale_replaced),
+        )
+    finally:
+        run_lock.__exit__(None, None, None)
     return exit_code, document
 
 

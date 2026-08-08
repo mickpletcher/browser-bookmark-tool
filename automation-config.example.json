@@ -13,6 +13,9 @@
   "browser_behavior": "block",
   "result_file": "C:\\Private\\browser-bookmark-automation-result.json",
   "lock_file": "C:\\Private\\browser-bookmark-automation.lock",
-  "lock_timeout_minutes": 180
+  "lock_timeout_minutes": 180,
+  "health_file": "C:\\Private\\browser-bookmark-automation-health.json",
+  "health_history_limit": 100,
+  "notifications_enabled": false,
+  "notification_command": []
 }
-

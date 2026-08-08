@@ -992,6 +992,10 @@ def test_load_automation_config_resolves_private_relative_paths(tmp_path: Path):
     assert config.result_file == result_file
     assert config.lock_file == tmp_path / "automation.lock"
     assert config.mappings == ("Personal",)
+    assert config.health_file == tmp_path / "browser-bookmark-automation-health.json"
+    assert config.health_history_limit == 100
+    assert not config.notifications_enabled
+    assert config.notification_command == ()
 
 
 def test_automation_requires_absolute_profile_mapping_paths(tmp_path: Path):
@@ -1109,6 +1113,27 @@ def test_run_backup_automation_writes_privacy_safe_result(tmp_path: Path):
     assert len(list(backup_dir.glob("Chrome_*.json"))) == 1
     assert "https://" not in serialized
     assert str(chrome) not in serialized
+    health = json.loads((tmp_path / "browser-bookmark-automation-health.json").read_text())
+    health_serialized = json.dumps(health)
+    record = health["records"][-1]
+    assert record["status"] == "success"
+    assert record["operation"] == "backup"
+    assert record["mappings"] == ["Personal"]
+    assert record["counts"]["mapping_succeeded"] == 1
+    assert record["error_category"] == "none"
+    assert set(record) == {
+        "operation",
+        "status",
+        "mappings",
+        "counts",
+        "duration_seconds",
+        "processes",
+        "error_category",
+    }
+    assert "https://" not in health_serialized
+    assert str(chrome) not in health_serialized
+    assert str(edge) not in health_serialized
+    assert str(backup_dir) not in health_serialized
 
 
 def test_run_dry_run_automation_creates_no_backups(tmp_path: Path):
@@ -1138,6 +1163,103 @@ def test_run_sync_automation_blocks_browsers_after_backup(
     assert "chrome.exe" in document["error"]
     assert len(list(backup_dir.glob("Chrome_*.json"))) == 1
     assert json.loads(result_file.read_text()) == document
+    record = json.loads((tmp_path / "browser-bookmark-automation-health.json").read_text())["records"][-1]
+    assert record["status"] == "blocked"
+    assert record["processes"] == ["chrome.exe"]
+    assert record["error_category"] == "browser_running"
+    assert record["counts"]["backups_created"] == 1
+
+
+def test_run_automation_records_stale_lock_recovery(tmp_path: Path):
+    config_file, _, _, _, _ = automation_files(tmp_path)
+    config = load_automation_config(config_file)
+    config.lock_file.write_text("stale")
+    old = sync_module.time.time() - 600
+    os.utime(config.lock_file, (old, old))
+
+    exit_code, _ = run_automation(config)
+
+    record = json.loads(config.health_file.read_text())["records"][-1]
+    assert exit_code == 0
+    assert record["status"] == "success"
+    assert record["counts"]["stale_locks_replaced"] == 1
+    assert record["error_category"] == "none"
+
+
+def test_repeated_failures_are_suppressed_until_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    config_file, _, _, _, _ = automation_files(tmp_path, operation="sync")
+    config_document = json.loads(config_file.read_text())
+    config_document["notifications_enabled"] = True
+    config_document["notification_command"] = ["local-notifier"]
+    config_file.write_text(json.dumps(config_document))
+    detections = iter([["chrome.exe"], ["chrome.exe"], [], ["chrome.exe"]])
+    monkeypatch.setattr(sync_module, "running_browser_processes", lambda: next(detections))
+    notifications: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sync_module,
+        "deliver_failure_notification",
+        lambda _command, record: notifications.append(record) or True,
+    )
+    config = load_automation_config(config_file)
+
+    assert run_automation(config)[0] == 1
+    assert run_automation(config)[0] == 1
+    assert len(notifications) == 1
+    assert run_automation(config)[0] == 0
+    assert run_automation(config)[0] == 1
+
+    assert len(notifications) == 2
+    assert notifications[0]["error_category"] == "browser_running"
+    statuses = [record["status"] for record in json.loads(config.health_file.read_text())["records"]]
+    assert statuses == ["blocked", "blocked", "success", "blocked"]
+
+
+def test_notification_payload_redacts_private_failure_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    config_file, chrome, _, backup_dir, _ = automation_files(tmp_path, operation="sync")
+    config_document = json.loads(config_file.read_text())
+    config_document["notifications_enabled"] = True
+    config_document["notification_command"] = ["local-notifier", "credential-value"]
+    config_file.write_text(json.dumps(config_document))
+    private_url = "https://secret.example.test/private"
+    private_title = "Confidential bookmark title"
+    (chrome / "Bookmarks").write_text(json.dumps(data(private_url, private_title)))
+    private_failure = f"write failed for {chrome} into {backup_dir}: {private_url} credential-value"
+    monkeypatch.setattr(
+        sync_module,
+        "synchronize",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(private_failure)),
+    )
+    notifications: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sync_module,
+        "deliver_failure_notification",
+        lambda _command, record: notifications.append(record) or True,
+    )
+
+    exit_code, _ = run_automation(load_automation_config(config_file))
+
+    config = load_automation_config(config_file)
+    serialized = json.dumps(notifications[0])
+    health_serialized = config.health_file.read_text()
+    assert exit_code == 1
+    assert private_url not in serialized
+    assert private_title not in serialized
+    assert str(chrome) not in serialized
+    assert str(backup_dir) not in serialized
+    assert "credential-value" not in serialized
+    assert "notification_command" not in serialized
+    assert notifications[0]["error_category"] == "automation"
+    assert private_url not in health_serialized
+    assert private_title not in health_serialized
+    assert str(chrome) not in health_serialized
+    assert str(backup_dir) not in health_serialized
+    assert "credential-value" not in health_serialized
 
 
 def test_run_sync_automation_reports_backups_after_transaction_failure(

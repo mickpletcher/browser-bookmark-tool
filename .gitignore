@@ -21,6 +21,7 @@ profile-mappings*.json
 automation-config*.json
 !automation-config.example.json
 browser-bookmark-automation-result*.json
+browser-bookmark-automation-health*.json
 browser-bookmark-automation*.lock*
 register-bookmark-task*.ps1
 

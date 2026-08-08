@@ -52,3 +52,10 @@ The following capabilities were already complete when the upgrade tracking files
 - Release: Unreleased
 - Summary: Adds a vendor-neutral local PowerShell entrypoint, private versioned configuration, no-write readiness checks, active and stale run locking, atomic privacy-safe JSON results, and copy-ready boundaries for Codex, Claude, and Copilot scheduling.
 - Verification: Configuration validation, readiness, concurrency, stale-lock recovery, backup, dry-run, blocked synchronization, explicit browser closure, structured-result privacy, CLI routing, and PowerShell wrapper execution tests pass. Scheduled execution has no `--force` option.
+
+### FUT-012: Scheduled-run health and failure notifications
+
+- Completed: 2026-08-07
+- Release: Unreleased
+- Summary: Adds capped allowlisted health history for every scheduler run and optional local failure delivery through a configured command. Notifications are disabled by default, contain only the sanitized health record, suppress consecutive matching failures, and reset after a successful run or different failure.
+- Verification: The 80-case suite covers successful health records, blocked synchronization, stale-lock recovery counts, repeated-failure suppression, recovery reset, disabled defaults, and redaction of bookmark titles, URLs, browser and backup paths, configuration values, and credentials. Ruff, Python compilation, and diff checks pass.

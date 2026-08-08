@@ -6,14 +6,14 @@ Release readiness: Needs CI verification
 
 ## Summary
 
-The project is a Windows application for previewing, backing up, exporting, restoring, and organizing Chrome bookmarks and Microsoft Edge favorites. Version 0.2.0 provides transactional write and browser-process protections. The unreleased scheduler update adds a vendor-neutral local execution contract for Codex, Claude, Copilot, Windows Task Scheduler, and other trusted schedulers without exposing bookmark data to cloud agents.
+The project is a Windows application for previewing, backing up, exporting, restoring, and organizing Chrome bookmarks and Microsoft Edge favorites. Version 0.2.0 provides transactional write and browser-process protections. The unreleased scheduler update adds a vendor-neutral local execution contract, capped privacy-safe health history, and optional rate-limited failure notifications for Codex, Claude, Copilot, Windows Task Scheduler, and other trusted local schedulers.
 
 ## Current status
 
 | Area | Status | Notes |
 | --- | --- | --- |
 | Packaging | Ready | Editable installation, module execution, and the batch launcher command path pass verification. |
-| Automated tests | Passing | All 77 test cases pass on Python 3.13.3 across merge, preview, mapping, restore, integrity, logging, scheduling, automation configuration, path enforcement, locking, structured results, failure artifact reporting, PowerShell execution, transaction, process, CLI, and GUI paths. |
+| Automated tests | Passing | All 80 test cases pass on Python 3.13.3 across merge, preview, mapping, restore, integrity, logging, scheduling, automation configuration, path enforcement, locking, structured results, health history, notification suppression and redaction, failure artifact reporting, PowerShell execution, transaction, process, CLI, and GUI paths. |
 | Backup safety | Ready | Every run creates HTML and JSON backups plus a validated SHA-256 manifest. Microsecond timestamps prevent collisions, and filename-based retention ignores unrelated files. |
 | Synchronization safety | Ready | Both replacements are prepared and validated before writes. Chrome is restored automatically if the Edge replacement fails. |
 | Bookmark organization | Ready | Duplicate removal and recursive folder-first alphabetization are independently optional in the GUI and CLI. |
@@ -22,7 +22,7 @@ The project is a Windows application for previewing, backing up, exporting, rest
 | Restore | Ready | Chrome and Edge can be restored independently from JSON snapshots after preserving the current file. HTML remains a browser-import format. |
 | Multi-profile support | Ready | Private named mapping files separate work and personal profile pairs; CLI runs one, several, or all mappings. |
 | Integrity and logging | Ready | Manifests validate SHA-256 and size before pruning. Default logs contain operation metadata and counts but no bookmark URLs. |
-| Scheduling | Ready | A common local PowerShell entrypoint provides private configuration, no-write readiness checks, atomic locks, privacy-safe JSON results, and explicit backup, dry-run, or sync modes for Codex, Claude, Copilot, and deterministic schedulers. |
+| Scheduling | Ready | A common local PowerShell entrypoint provides private configuration, no-write readiness checks, atomic locks, privacy-safe JSON results, capped allowlisted health history, disabled-by-default failure notifications, and explicit backup, dry-run, or sync modes. |
 | Windows distribution | Needs verification | Local tests and explicit Ruff 0.16.2 rules pass. A new Windows CI run is required after commit before the remote artifact is release-ready. |
 | Chromium GUID handling | Ready | Existing Chrome GUIDs are preserved, imported nodes receive new UUIDs, duplicate GUIDs are rejected, and repeated synchronization remains stable. |
 | Browser process handling | Ready | Running browsers block synchronization after backups and export. CLI users can explicitly force-close both process trees with `--close-browsers` or bypass detection with `--force`. |
@@ -52,6 +52,8 @@ The project is a Windows application for previewing, backing up, exporting, rest
 - Generates backup-first Task Scheduler scripts and a standalone Windows executable.
 - Gives local AI schedulers a deterministic entrypoint without granting `--force`, repository mutation, or access to bookmark contents in structured results.
 - Blocks concurrent scheduled runs and atomically publishes count-only results without local profile or backup paths.
+- Records capped scheduled-run health using only operation status, mapping names, counts, duration, browser process names, and allowlisted error categories.
+- Sends optional sanitized failure records to a local notifier once per consecutive matching failure and resets suppression after recovery.
 - Detects Chrome and Edge `Default` and `Profile *` profiles.
 - Keeps runtime dependencies in the Python standard library.
 
@@ -80,7 +82,7 @@ Verified on Windows 11 with Python 3.13.3 on 2026-08-07.
 - `py -m pip install -e .`: passed.
 - `py -m browser_bookmark_sync --help`: passed.
 - `Run Browser Bookmark Tool.bat --help`: passed and reached the application through the Python module.
-- `py -m pytest -q`: passed with 77 cases, including private automation configuration, absolute-path enforcement, readiness, active and stale locks, backup, dry-run, blocked and browser-closing sync, process-override rejection, failure artifact reporting, privacy-safe results, CLI routing, and PowerShell wrapper execution.
+- `py -m pytest -q`: passed with 80 cases, including private automation configuration, absolute-path enforcement, readiness, active and stale locks, stale-lock health recovery, backup, dry-run, blocked and browser-closing sync, health allowlisting, repeated-failure suppression, recovery reset, notification redaction, process-override rejection, failure artifact reporting, privacy-safe results, CLI routing, and PowerShell wrapper execution.
 - `py -m ruff check .`: passed with Ruff 0.16.2 and an explicit project rule set.
 - `py -m py_compile browser_bookmark_sync.py test_sync.py`: passed.
 - Standalone PyInstaller build: passed. The generated `BrowserBookmarkTool.exe --help` smoke test passed.
@@ -100,7 +102,7 @@ Actions have read-only default workflow permissions, require full commit SHA pin
 - Non-provider secret patterns and secret validity checks remain unavailable for this account and are disabled.
 - The Windows CI workflow uses verified official action SHAs, read-only contents permission, non-persisted checkout credentials, and a 20-minute job timeout. Its two current runs failed at lint before the explicit Ruff configuration was added; the replacement configuration passes locally and awaits a new remote run.
 
-The documentation was reviewed against the current implementation and live GitHub configuration, including local AI scheduling, private configuration, structured results, concurrency, repository security, Windows CI status, and upgrade tracking on 2026-08-07.
+The documentation was reviewed against the current implementation and live GitHub configuration, including local AI scheduling, private configuration, structured results, health history, optional notification delivery, concurrency, repository security, Windows CI status, and upgrade tracking on 2026-08-07.
 
 ## Maintenance requirement
 

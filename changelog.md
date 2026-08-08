@@ -20,7 +20,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - Added `SCHEDULING.md` with setup instructions, execution boundaries, result schema, failure handling, and copy-ready model prompts.
 - Documented the supported local scheduling paths for Codex desktop tasks, Claude Desktop local tasks, Claude Code session loops, and GitHub Copilot CLI, including each cloud or session boundary.
 - Added active-run, stale-lock, backup, dry-run, blocked synchronization, browser-closing sync, privacy, CLI, and PowerShell wrapper regression coverage.
-- Added scheduled-run health and failure notifications to the Priority 2 backlog as the replacement candidate for the completed scheduler execution contract.
+- Added capped scheduled-run health history containing only operation status, mapping names, numeric counts, duration, browser process names, and allowlisted error categories.
+- Added optional local failure notification commands with sanitized JSON standard input, disabled-by-default configuration, consecutive-failure suppression, and recovery reset.
+- Added successful-run, blocked synchronization, stale-lock recovery, repeated-failure, recovery, and notification-redaction regression coverage.
+- Added `FUT-014` notification delivery verification and provider templates to the Priority 2 backlog as the replacement candidate for completed `FUT-012`.
 
 ### Security
 
@@ -31,6 +34,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - Strengthened `main` protection with linear-history and review-conversation-resolution requirements while retaining administrator enforcement and force-push and deletion blocks.
 - Prevented scheduled runs from using the process-detection `--force` bypass.
 - Excluded private automation configurations, results, and lock files from Git.
+- Excluded private scheduler health histories from Git and kept notification commands and credentials out of health and notification payloads.
 - Restricted scheduled structured output to counts, mapping names, operation status, process names, and privacy-safe errors without bookmark URLs or local paths.
 
 ### Changed
@@ -44,7 +48,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - Standardized pull requests on squash merge, enabled branch update suggestions, and enabled automatic deletion of merged branches.
 - Recorded the live Windows CI Ruff 0.16.2 lint failure as a release-readiness finding; tests pass before the failing lint step.
 - Defined explicit Ruff rules and a supported `ruff>=0.16.2,<0.17` range so local and Windows CI lint behavior does not drift silently.
-- Updated the maintained test suite to 77 passing cases.
+- Updated the maintained test suite to 80 passing cases.
 
 ## [0.2.0] - 2026-08-07
 

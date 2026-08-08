@@ -20,7 +20,7 @@ Do not copy real bookmark files, profile mappings, automation configuration, log
 - `Invoke-BrowserBookmarkAutomation.ps1` is the common local entrypoint.
 - `automation-config.example.json` is the sanitized scheduler configuration template.
 - `profile-mappings.example.json` is the sanitized browser profile mapping template.
-- The private automation configuration, profile mapping, lock, result, backups, and logs must remain outside the repository.
+- The private automation configuration, profile mapping, lock, result, health history, backups, and logs must remain outside the repository.
 
 The repository ignores common private automation file names, but Git exclusion is only a secondary safeguard.
 
@@ -33,7 +33,8 @@ The repository ignores common private automation file names, but Git exclusion i
 5. Select the mapping names to run. An empty `mappings` list runs every mapping in the profile map.
 6. Keep `operation` set to `backup` for the first scheduled runs.
 7. Keep `browser_behavior` set to `block` unless forced browser closure has been explicitly approved and tested.
-8. Restrict the private directory so only the intended Windows account can read it.
+8. Keep `notifications_enabled` set to `false` until a local notification command has been reviewed and tested.
+9. Restrict the private directory so only the intended Windows account can read it.
 
 Relative paths in the automation configuration are resolved from the directory containing that configuration. Chrome, Edge, and backup paths inside the private profile mapping must be absolute so scheduler working-directory changes cannot redirect browser access.
 
@@ -54,6 +55,10 @@ Relative paths in the automation configuration are resolved from the directory c
 | `result_file` | No | Privacy-safe JSON result path. Defaults beside the configuration. |
 | `lock_file` | No | Atomic concurrency lock path. Defaults beside the configuration. |
 | `lock_timeout_minutes` | No | Stale-lock timeout from 5 through 1440 minutes. Default is 180. |
+| `health_file` | No | Capped privacy-safe health history path. Defaults beside the configuration. |
+| `health_history_limit` | No | Health records to retain from 1 through 1000. Default is 100. |
+| `notifications_enabled` | No | Enables failure delivery through `notification_command`. Default is `false`. |
+| `notification_command` | When notifications are enabled | Local executable and arguments as a JSON string array. Receives one sanitized record through standard input. |
 
 There is no automation setting equivalent to `--force`. Scheduled runs cannot bypass browser-process detection.
 
@@ -97,6 +102,27 @@ Each run atomically replaces the private `result_file` with count-only JSON cont
 - a privacy-safe failure message.
 
 The result excludes bookmark titles, URLs, browser profile paths, backup paths, and configuration paths. Detailed private paths remain only in local application output files.
+
+## Health history
+
+Each run atomically appends one record to `health_file`. The ordered history is capped by `health_history_limit`. A record contains only:
+
+- operation and `success`, `failed`, or `blocked` status;
+- mapping names;
+- numeric bookmark, mapping, artifact, synchronization, and stale-lock recovery counts;
+- duration in seconds;
+- detected or closed `chrome.exe` and `msedge.exe` process names;
+- one allowlisted error category.
+
+Health records do not contain timestamps, bookmark titles, URLs, browser profile paths, backup paths, configuration values, raw error messages, notification commands, or credentials. The health file is still private local scheduler output and must remain outside the repository.
+
+## Optional failure notifications
+
+Notifications are disabled by default. To enable them, set `notifications_enabled` to `true` and provide `notification_command` as a JSON array. The command is invoked directly without a shell. It receives one health record as JSON through standard input.
+
+Use a reviewed local script or executable. Do not place passwords, tokens, webhook URLs, or other credentials in `notification_command`. Have the local notifier obtain secrets from an approved private environment variable, Windows Credential Manager, or another protected store.
+
+The tool sends the first failed or blocked record. Consecutive records with the same status, operation, mappings, process names, and error category are suppressed. Counts and duration do not defeat suppression. A successful run or a different failure signature resets the suppression state. Notification command failure does not change the bookmark operation result.
 
 ## Concurrency
 

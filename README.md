@@ -10,7 +10,7 @@ Version: 0.2.0
 
 Release readiness: Needs CI verification
 
-The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, and vendor-neutral local AI scheduling contract are implemented for Windows. The Ruff version-drift fix passes locally and requires a new Windows CI run after commit. Native macOS Chrome and Edge compatibility and later Safari support are tracked as separate future upgrades and are not currently implemented.
+The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The Ruff version-drift fix passes locally and requires a new Windows CI run after commit. Native macOS Chrome and Edge compatibility and later Safari support are tracked as separate future upgrades and are not currently implemented.
 
 - [Current assessment](assessment.md)
 - [Changelog](changelog.md)
@@ -305,6 +305,8 @@ Run the reviewed configuration manually before creating a recurring schedule:
 
 The default example is backup-only. Scheduled synchronization requires `operation` set to `sync`. Running browsers either block synchronization after backups and HTML export or are force-closed only when `browser_behavior` is explicitly set to `close`. Scheduled execution has no `--force` equivalent.
 
+Every scheduled run appends an allowlisted record to the capped private `health_file`. Records contain only operation status, mapping names, numeric counts, duration, Chrome or Edge process names, and an error category. Optional failure notification delivery is disabled by default. When enabled, the configured local command receives only that sanitized record through standard input. Consecutive matching failures notify once until a successful run or a different failure resets suppression.
+
 See [SCHEDULING.md](SCHEDULING.md) for the full private configuration schema, structured result format, concurrency behavior, security boundary, and copy-ready Codex, Claude, and Copilot prompts.
 
 ### Logging
@@ -393,7 +395,7 @@ Retention is ordered by the timestamp in each generated filename. It does not re
 
 ## Privacy and security
 
-Bookmark files, backups, profile mappings, automation configurations, and private scheduler outputs can expose browsing history, internal URLs, access tokens embedded in URLs, usernames, and private filesystem paths. Store them outside the repository and do not attach real data to issues, prompts, pull requests, or cloud artifacts. The project `.gitignore` blocks standard Chromium bookmark files, generated backups, logs, restore snapshots, task scripts, private profile mappings, automation results, and lock files as a secondary safeguard. Only the sanitized mapping and automation examples belong in Git.
+Bookmark files, backups, profile mappings, automation configurations, and private scheduler outputs can expose browsing history, internal URLs, access tokens embedded in URLs, usernames, and private filesystem paths. Store them outside the repository and do not attach real data to issues, prompts, pull requests, or cloud artifacts. The project `.gitignore` blocks standard Chromium bookmark files, generated backups, logs, restore snapshots, task scripts, private profile mappings, automation results, health histories, and lock files as a secondary safeguard. Notification commands must obtain credentials from a private local mechanism instead of command arguments. Only the sanitized mapping and automation examples belong in Git.
 
 Report security vulnerabilities privately through GitHub. See the [security policy](SECURITY.md) for the reporting process and evidence requirements.
 
@@ -453,7 +455,7 @@ Build the standalone executable:
 
 The executable is written to `dist\BrowserBookmarkTool.exe`. The SHA-pinned Windows workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) is configured to install development dependencies, run tests, compile the Python files, check the CLI, build the executable, and upload it as a workflow artifact. Current live workflow status and any release blockers are recorded in [assessment.md](assessment.md).
 
-The current test suite contains 77 passing cases covering conservative and aggressive URL matching, five merge strategies, dry-run reporting, named multi-profile execution, restore safety, SHA-256 manifests, manifest path validation, privacy-safe logging, Python and standalone Task Scheduler generation, scheduler configuration, absolute-path enforcement, readiness, locking, structured results, process-override rejection, the PowerShell automation wrapper, failure artifact reporting, GUID handling, organization, retention, transactional writes, process controls, CLI behavior, and GUI errors.
+The current test suite contains 80 passing cases covering conservative and aggressive URL matching, five merge strategies, dry-run reporting, named multi-profile execution, restore safety, SHA-256 manifests, manifest path validation, privacy-safe logging, Python and standalone Task Scheduler generation, scheduler configuration, absolute-path enforcement, readiness, active and stale locking, structured results, health history, failure rate limiting and recovery, notification redaction, process-override rejection, the PowerShell automation wrapper, failure artifact reporting, GUID handling, organization, retention, transactional writes, process controls, CLI behavior, and GUI errors.
 
 ## Documentation maintenance requirement
 
