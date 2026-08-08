@@ -19,7 +19,7 @@ body:
   - type: input
     attributes:
       label: Browser Bookmark Tool version
-      placeholder: 0.2.0 or commit SHA
+      placeholder: 0.3.0 or commit SHA
     validations:
       required: true
   - type: input
@@ -30,8 +30,8 @@ body:
       required: true
   - type: input
     attributes:
-      label: Chrome and Edge versions
-      placeholder: Chrome 000, Edge 000
+      label: Browser versions
+      placeholder: Chrome 000, Edge 000, Firefox 000 when applicable
     validations:
       required: true
   - type: dropdown

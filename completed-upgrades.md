@@ -67,6 +67,13 @@ The following capabilities were already complete when the upgrade tracking files
 - Summary: Adds capped allowlisted health history for every scheduler run and optional local failure delivery through a configured command. Notifications are disabled by default, contain only the sanitized health record, suppress consecutive matching failures, and reset after a successful run or different failure.
 - Verification: The 80-case suite covers successful health records, blocked synchronization, stale-lock recovery counts, repeated-failure suppression, recovery reset, disabled defaults, and redaction of bookmark titles, URLs, browser and backup paths, configuration values, and credentials. Ruff, Python compilation, and diff checks pass.
 
+### FUT-006: Firefox bookmark support
+
+- Completed: 2026-08-08
+- Release: Unreleased
+- Summary: Adds explicit Windows Firefox profile discovery, optional Places import, opt-in export to a tool-owned Firefox folder, consistent SQLite backups, manifest coverage, Firefox process controls, and rollback of both Chromium files when Firefox replacement fails. Firefox remains disabled by default across the GUI, CLI, mappings, and scheduler configuration.
+- Verification: The 94-case suite covers explicit relative and absolute profile discovery, live Places schema reading, conservative and aggressive cross-browser matching, disabled-mode isolation, backup-before-write ordering, manifest integrity, Firefox export, process blocking, and three-browser rollback. Ruff, Python compilation, and temporary-profile export staging from a copied live Firefox backup pass.
+
 ### COMP-002: SignPath Foundation application readiness
 
 - Completed: 2026-08-08

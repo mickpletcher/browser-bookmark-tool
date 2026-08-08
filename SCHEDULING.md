@@ -4,7 +4,7 @@ Browser Bookmark Tool can be invoked by Codex, Claude, Copilot, Windows Task Sch
 
 ## Required execution boundary
 
-Chrome and Edge bookmark files exist on the Windows computer that owns the browser profiles. A cloud-hosted coding agent or GitHub-hosted runner cannot access those files.
+Chrome, Edge, and optional Firefox bookmark files exist on the Windows computer that owns the browser profiles. A cloud-hosted coding agent or GitHub-hosted runner cannot access those files.
 
 Use one of these execution environments:
 
@@ -27,16 +27,17 @@ The repository ignores common private automation file names, but Git exclusion i
 ## Set up the private files
 
 1. Copy `profile-mappings.example.json` to a private directory outside the repository.
-2. Replace its placeholder Chrome, Edge, and backup paths with the correct local paths.
+2. Replace its placeholder Chrome, Edge, optional Firefox, and backup paths with the correct local paths.
 3. Copy `automation-config.example.json` to the same private directory.
 4. Set `profile_map` to the private profile mapping file.
 5. Select the mapping names to run. An empty `mappings` list runs every mapping in the profile map.
 6. Keep `operation` set to `backup` for the first scheduled runs.
 7. Keep `browser_behavior` set to `block` unless forced browser closure has been explicitly approved and tested.
-8. Keep `notifications_enabled` set to `false` until a local notification command has been reviewed and tested.
-9. Restrict the private directory so only the intended Windows account can read it.
+8. Keep `firefox_enabled` and `firefox_export` set to `false` unless the optional Firefox workflow has been tested with the selected mappings.
+9. Keep `notifications_enabled` set to `false` until a local notification command has been reviewed and tested.
+10. Restrict the private directory so only the intended Windows account can read it.
 
-Relative paths in the automation configuration are resolved from the directory containing that configuration. Chrome, Edge, and backup paths inside the private profile mapping must be absolute so scheduler working-directory changes cannot redirect browser access.
+Relative paths in the automation configuration are resolved from the directory containing that configuration. Chrome, Edge, enabled Firefox, and backup paths inside the private profile mapping must be absolute so scheduler working-directory changes cannot redirect browser access.
 
 ## Configuration fields
 
@@ -52,6 +53,8 @@ Relative paths in the automation configuration are resolved from the directory c
 | `duplicate_mode` | No | `conservative` or explicit `aggressive`. |
 | `merge_strategy` | No | One of the five documented merge strategies. |
 | `browser_behavior` | No | `block` or `close`. `close` is valid only for `sync`. |
+| `firefox_enabled` | No | Uses optional `firefox_profile` mapping paths for import. Default is `false`. |
+| `firefox_export` | No | Adds enabled Firefox profiles as write targets. Requires `operation: sync` and `firefox_enabled: true`. Default is `false`. |
 | `result_file` | No | Privacy-safe JSON result path. Defaults beside the configuration. |
 | `lock_file` | No | Atomic concurrency lock path. Defaults beside the configuration. |
 | `lock_timeout_minutes` | No | Stale-lock timeout from 5 through 1440 minutes. Default is 180. |
@@ -111,7 +114,7 @@ Each run atomically appends one record to `health_file`. The ordered history is 
 - mapping names;
 - numeric bookmark, mapping, artifact, synchronization, and stale-lock recovery counts;
 - duration in seconds;
-- detected or closed `chrome.exe` and `msedge.exe` process names;
+- detected or closed `chrome.exe`, `msedge.exe`, and enabled `firefox.exe` process names;
 - one allowlisted error category.
 
 Health records do not contain timestamps, bookmark titles, URLs, browser profile paths, backup paths, configuration values, raw error messages, notification commands, or credentials. The health file is still private local scheduler output and must remain outside the repository.
@@ -169,7 +172,7 @@ GitHub Copilot cloud automations are not available for this public repository, a
 1. Schedule daily backup-only runs with `browser_behavior` set to `block`.
 2. Review several result files, manifests, HTML exports, and retention outcomes.
 3. Run `dry-run` with the intended merge and organization settings.
-4. Test an attended `sync` while both browsers are closed.
+4. Test an attended `sync` while all selected write-target browsers are closed.
 5. Enable scheduled `sync` only after the attended test passes.
 6. Use `close` only if force-closing browsers and losing unsaved browser work is acceptable.
 7. Keep human review for configuration, schedule, repository policy, and executable changes.

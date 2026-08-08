@@ -1,9 +1,11 @@
 # Browser Bookmark Tool
 
+![Browser Bookmark Tool social preview](.github/social-preview.jpg)
+
 [![Windows CI](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Browser Bookmark Tool is a Windows desktop and command-line application for backing up, exporting, and synchronizing bookmarks between Google Chrome and Microsoft Edge.
+Browser Bookmark Tool is a Windows desktop and command-line application for backing up, exporting, and synchronizing bookmarks between Google Chrome and Microsoft Edge, with optional Firefox import and export.
 
 The synchronization uses a conservative union. A bookmark found in either browser is retained. Deletions are not propagated.
 
@@ -27,18 +29,21 @@ The GUI, CLI, standalone build, automated tests, transactional writes, dry-run r
 
 ## Features
 
-- Detects Chrome and Edge `Default` and `Profile *` profiles.
+- Detects Chrome and Edge `Default` and `Profile *` profiles and reads Firefox profiles explicitly from `%APPDATA%\Mozilla\Firefox\profiles.ini`.
 - Creates timestamped copies of both original `Bookmarks` JSON files.
 - Exports the merged bookmark collection to portable Netscape bookmark HTML.
 - Synchronizes unique bookmarks between Chrome and Edge when requested.
+- Optionally imports Firefox bookmarks into the merged union without writing Firefox.
+- Optionally exports missing merged bookmarks to a dedicated Firefox `Browser Bookmark Tool` folder.
 - Deduplicates bookmarks using a normalized URL.
 - Optionally removes duplicate URLs already present within the merged bookmark collection.
 - Optionally alphabetizes folders and bookmarks recursively.
 - Prepares and validates both replacement files before changing either browser.
 - Restores Chrome automatically if the Edge replacement fails.
-- Detects `chrome.exe` and `msedge.exe` before synchronization and blocks writes while either browser is running.
+- Restores Chrome and Edge automatically if an enabled Firefox replacement fails.
+- Detects `chrome.exe` and `msedge.exe` before synchronization and detects `firefox.exe` when Firefox is an enabled write target.
 - Keeps raw backups and the merged HTML export when synchronization is blocked by a running browser.
-- Optionally force-closes Chrome and Edge process trees before synchronization through the CLI.
+- Optionally force-closes selected browser process trees before synchronization through the CLI.
 - Creates a portable HTML backup during every run.
 - Retains up to 50 backup sets, with 50 as the default.
 - Uses microsecond timestamps so rapid runs do not overwrite previous backups.
@@ -62,7 +67,9 @@ The GUI, CLI, standalone build, automated tests, transactional writes, dry-run r
 
 ## Current synchronization behavior
 
-Chrome is used as the primary bookmark structure. Unique Edge bookmarks are copied into an `Imported from other browser` folder under Chrome's `Other bookmarks` root. The resulting merged structure is then written to both browsers.
+Chrome is used as the primary bookmark structure. Unique Edge bookmarks are copied into an `Imported from other browser` folder under Chrome's `Other bookmarks` root. The resulting merged structure is then written to both Chromium browsers.
+
+Firefox is disabled by default. When enabled, Firefox bookmarks are read from the selected profile's `places.sqlite` database and unique items are added to the same merged union under `Imported from Firefox`. Firefox export requires a separate opt in. It preserves existing Firefox bookmarks and adds only missing merged URLs to `Other Bookmarks\Browser Bookmark Tool`; it does not delete or reorganize existing Firefox data.
 
 Existing Chrome GUID values are preserved. Every imported Edge bookmark, imported folder, and generated import wrapper receives a new UUID. The merge stops before export or synchronization if duplicate GUID values remain. Repeated synchronization preserves the generated GUIDs and does not create another import folder when no new URLs exist.
 
@@ -85,7 +92,7 @@ Available merge strategies:
 - `merge-folders` recursively combines folders whose names match without case sensitivity.
 - `dated-folder` places unique Edge content under a dated import folder.
 
-Cross-browser URL matching is always applied while building the merged union. The optional **Remove duplicate bookmarks** setting also removes repeated URLs already present within Chrome's retained structure. The first occurrence is kept.
+Cross-browser URL matching is always applied while building the merged union. Conservative or aggressive matching applies equally to Chrome, Edge, and enabled Firefox data. The optional **Remove duplicate bookmarks** setting also removes repeated URLs already present within Chrome's retained structure. The first occurrence is kept.
 
 The optional **Alphabetize bookmarks** setting sorts every folder recursively. Folders are placed first and sorted by name. Bookmarks follow and are sorted by their displayed name, or by URL when they have no name. Sorting ignores letter case.
 
@@ -93,19 +100,19 @@ This version does not propagate deletions. If a bookmark is deleted from one bro
 
 ## Safety requirements
 
-Close Chrome and Edge completely before synchronization. Include background browser processes. An open browser can overwrite the synchronized file when it exits.
+Close Chrome and Edge completely before synchronization. Also close Firefox when Firefox export is enabled. Include background browser processes. An open browser can overwrite synchronized data when it exits.
 
-Before writing, the tool checks the Windows process list for `chrome.exe` and `msedge.exe`. If either executable is running, synchronization is blocked. The GUI error lists the detected executable names. The CLI prints the same error and exits with code `1`.
+Before writing, the tool checks the Windows process list for `chrome.exe` and `msedge.exe`. It also checks `firefox.exe` only when Firefox export is enabled. A detected target browser blocks synchronization. Firefox import-only and disabled runs do not add a Firefox process requirement.
 
 Process detection occurs after the raw backups and merged HTML export are created. A blocked synchronization therefore leaves both browser files unchanged while keeping the backup and export results. Backup-only and export-only runs do not check browser processes and remain available while either browser is open.
 
-The tool creates raw backups before changing either browser file. It then prepares the Chrome and Edge replacement files in their respective profile directories and parses both files back as JSON. Neither browser is changed unless both prepared files match the merged data.
+The tool creates raw backups before changing browser data. An enabled Firefox run adds a consistent `places.sqlite` backup to the validated manifest. Chrome and Edge replacements are written and parsed back as JSON. Firefox export is prepared from its backup in a separate SQLite database and must pass schema, bookmark-root, and SQLite integrity checks before any live replacement begins.
 
-Chrome is replaced first. If that replacement fails, Edge remains unchanged. If the Edge replacement fails, the original Chrome file is restored automatically. If automatic restoration also fails, the error identifies the preserved rollback file and the raw timestamped backups remain available for manual recovery.
+Chrome is replaced first. If that replacement fails, Edge remains unchanged. If the Edge replacement fails, the original Chrome file is restored automatically. When Firefox export is enabled, Firefox is replaced last. A Firefox replacement failure restores both original Chromium files. If automatic restoration fails, the rollback files are preserved and the raw timestamped backups remain available for manual recovery.
 
-The CLI-only `--force` option bypasses browser process detection. Use it only after independently confirming that Chrome and Edge are completely closed. It does not close browsers or prevent an open browser from overwriting the synchronized files.
+The CLI-only `--force` option bypasses browser process detection. Use it only after independently confirming that every write target is completely closed. It does not close browsers or prevent an open browser from overwriting synchronized data.
 
-The CLI-only `--close-browsers` option takes the opposite approach. After backups and the HTML export are created, it force-terminates the detected `chrome.exe` and `msedge.exe` process trees using Windows `taskkill /T /F`. It verifies that both executables stopped before writing bookmarks. If either remains, synchronization is blocked.
+The CLI-only `--close-browsers` option takes the opposite approach. After backups and the HTML export are created, it force-terminates detected target process trees using Windows `taskkill /T /F`. It includes `firefox.exe` only when Firefox export is enabled and verifies all selected write targets stopped before writing.
 
 Force-closing browsers can discard unsaved form entries, downloads, private-window state, and other active work. Use `--close-browsers` only when that loss is acceptable. It cannot be combined with `--force`.
 
@@ -197,7 +204,7 @@ Every signing request must be manually approved after its source, tag, required 
 
 ## Run the desktop app
 
-1. Close Chrome and Edge if you intend to synchronize.
+1. Close Chrome and Edge if you intend to synchronize. Close Firefox too when **Write to Firefox** is selected.
 2. Start the application using either method:
 
    Double-click:
@@ -214,19 +221,20 @@ Every signing request must be manually approved after its source, tag, required 
 
 3. Select the Chrome profile.
 4. Select the Edge profile.
-5. Confirm or change the backup folder.
-6. Set the number of backup sets to retain, from 1 through 50. The default is 50.
-7. Select either optional organization setting when required:
+5. Leave **Include Firefox** cleared for the existing Chrome and Edge workflow. To import Firefox, select the discovered Firefox profile and enable **Include Firefox**. Select **Write to Firefox** only when Firefox should also receive missing merged bookmarks during synchronization.
+6. Confirm or change the backup folder.
+7. Set the number of backup sets to retain, from 1 through 50. The default is 50.
+8. Select either optional organization setting when required:
 
    - **Remove duplicate bookmarks** removes repeated normalized URLs from the merged output.
    - **Alphabetize bookmarks** sorts folders first and bookmarks second at every folder level.
 
-8. Select conservative or aggressive duplicate matching and the required merge strategy.
-9. Choose one of the following actions:
+9. Select conservative or aggressive duplicate matching and the required merge strategy.
+10. Choose one of the following actions:
 
    - **Preview Changes** displays counts, direction differences, duplicate removals, folder additions, reorder counts, and final totals without creating or changing files.
    - **Back Up + Export HTML** creates raw browser backups and a merged HTML export without changing either browser.
-   - **Back Up + Sync** creates backups and the HTML export, then writes the merged bookmarks to both browsers.
+   - **Back Up + Sync** creates backups and the HTML export, writes the merged bookmarks to Chrome and Edge, and writes missing URLs to Firefox only when **Write to Firefox** is selected.
     - **Open Backup Folder** opens the configured backup directory.
     - **Verify Backup** checks Chromium structure, GUID uniqueness, and the matching SHA-256 manifest without changing either browser.
     - **Restore Chrome** or **Restore Edge** restores that browser independently from a selected raw JSON recovery snapshot after preserving its current file.
@@ -234,7 +242,7 @@ Every signing request must be manually approved after its source, tag, required 
 
 The app automatically selects the first detected profile for each browser. Review both selections before running an action.
 
-The organization settings affect the merged HTML export on both actions. They change Chrome and Edge only when **Back Up + Sync** is selected.
+The organization settings affect the merged HTML export on both actions. They change Chrome and Edge only when **Back Up + Sync** is selected. Firefox changes require both **Include Firefox** and **Write to Firefox**.
 
 HTML backups are portable imports but cannot directly restore full Chromium metadata. Use the JSON recovery snapshots for direct restore.
 
@@ -245,9 +253,11 @@ The tool searches these standard locations:
 ```text
 Chrome: %LOCALAPPDATA%\Google\Chrome\User Data\Default
 Edge:   %LOCALAPPDATA%\Microsoft\Edge\User Data\Default
+Firefox profile list: %APPDATA%\Mozilla\Firefox\profiles.ini
+Firefox data:         <selected profile>\places.sqlite
 ```
 
-It also detects directories named `Profile *` under each browser's `User Data` directory when they contain a `Bookmarks` file.
+It also detects directories named `Profile *` under each Chromium browser's `User Data` directory when they contain a `Bookmarks` file. Firefox discovery parses `profiles.ini`, honors `IsRelative`, prefers sections marked `Default=1`, and includes only profiles containing `places.sqlite`.
 
 ## Command-line use
 
@@ -265,7 +275,7 @@ py .\browser_bookmark_sync.py `
 
 ### Back up, export, and synchronize
 
-Close both browsers, then add `--sync`:
+Close Chrome and Edge, then add `--sync`:
 
 ```powershell
 py .\browser_bookmark_sync.py `
@@ -309,6 +319,23 @@ py .\browser_bookmark_sync.py `
 
 Run this before aggressive duplicate matching, a new merge strategy, or a first synchronization.
 
+### Include Firefox
+
+Firefox stays disabled unless an explicit profile is supplied. This command imports Firefox into the merged union and writes Chrome and Edge only:
+
+```powershell
+py -m browser_bookmark_sync `
+  --sync `
+  --chrome-profile "$env:LOCALAPPDATA\Google\Chrome\User Data\Default" `
+  --edge-profile "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default" `
+  --firefox-profile "$env:APPDATA\Mozilla\Firefox\Profiles\PROFILE.default-release" `
+  --backup-dir "D:\Browser Bookmark Backups"
+```
+
+Add `--firefox-export` to write missing merged URLs to Firefox too. Firefox export requires `--sync`, creates and manifests `Firefox_*.sqlite` before checkpointing or replacing Firefox data, and blocks if `firefox.exe` is running unless `--force` or `--close-browsers` is explicitly selected.
+
+Named mappings store an optional `firefox_profile`. Add `--enable-firefox` to use those paths. The path remains ignored when the flag is omitted, so existing Chrome and Edge mapping behavior does not change. Add `--firefox-export` with `--sync` only when the named Firefox profiles should be write targets.
+
 ### Named profile mappings
 
 Copy [profile-mappings.example.json](profile-mappings.example.json) outside the repository and replace the placeholder paths. Mapping files contain private local paths and are ignored by Git.
@@ -322,7 +349,7 @@ py .\browser_bookmark_sync.py `
   --mapping Personal
 ```
 
-Repeat `--mapping` to run several named mappings. Omit `--mapping` to process every mapping in the file. Each mapping has its own Chrome profile, Edge profile, and backup directory, which reduces the risk of mixing work and personal profiles.
+Repeat `--mapping` to run several named mappings. Omit `--mapping` to process every mapping in the file. Each mapping has its own Chrome profile, Edge profile, optional Firefox profile, and backup directory, which reduces the risk of mixing work and personal profiles.
 
 ### Verify a JSON recovery snapshot
 
@@ -398,7 +425,7 @@ Every backup or synchronization writes a count-only `browser-bookmark-tool.log` 
 
 ### Force synchronization
 
-Process detection is a write-safety control. If detection itself is unavailable and you have independently confirmed that both browsers are closed, advanced users can bypass it:
+Process detection is a write-safety control. If detection itself is unavailable and you have independently confirmed that every write target is closed, advanced users can bypass it:
 
 ```powershell
 py .\browser_bookmark_sync.py `
@@ -408,7 +435,7 @@ py .\browser_bookmark_sync.py `
   --edge-profile "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default"
 ```
 
-Do not use `--force` merely because synchronization reported `chrome.exe` or `msedge.exe`. Close the detected processes first.
+Do not use `--force` merely because synchronization reported a browser executable. Close the detected processes first.
 
 ### Close browsers automatically
 
@@ -431,7 +458,7 @@ Backups and the HTML export are created before process termination. The command 
 | Option | Required | Description |
 | --- | --- | --- |
 | `--gui` | No | Opens the desktop interface. |
-| `--sync` | No | Writes the merged bookmarks to both browsers. Without it, the run only backs up and exports. |
+| `--sync` | No | Writes the merged bookmarks to Chrome and Edge. Without it, the run only backs up and exports. |
 | `--dry-run` | No | Reports planned counts and folder changes without creating or changing files. |
 | `--check-automation` | AI or local scheduling | Validates a private automation configuration without creating backups or changing browser files. |
 | `--run-automation` | AI or local scheduling | Executes a private automation configuration under a concurrency lock and writes a privacy-safe JSON result. |
@@ -439,6 +466,9 @@ Backups and the HTML export are created before process termination. The command 
 | `--verify-manifest` | No | Explicit matching manifest path for `--verify-backup`. |
 | `--chrome-profile` | CLI operations | Path to a Chrome profile containing `Bookmarks`. |
 | `--edge-profile` | CLI operations | Path to an Edge profile containing `Bookmarks`. |
+| `--firefox-profile` | No | Explicit Firefox profile containing `places.sqlite`; enables Firefox for a direct run. |
+| `--enable-firefox` | No | Uses optional `firefox_profile` paths from named mappings. |
+| `--firefox-export` | No | Adds Firefox as a write target during `--sync`; requires Firefox to be enabled. |
 | `--backup-dir` | No | Output directory. Defaults to `Documents\Browser Bookmark Backups`. |
 | `--profile-map` | No | Private JSON file containing named profile mappings. |
 | `--mapping` | No | Mapping name to process. Repeat for several mappings. |
@@ -448,7 +478,7 @@ Backups and the HTML export are created before process termination. The command 
 | `--duplicate-mode` | No | `conservative` by default or explicit `aggressive` matching. |
 | `--merge-strategy` | No | Selects `chrome-wins`, `edge-wins`, `preserve-both`, `merge-folders`, or `dated-folder`. |
 | `--force` | No | Bypasses browser process detection during synchronization. It has no effect on export-only runs. |
-| `--close-browsers` | No | Force-terminates detected Chrome and Edge process trees, verifies closure, then synchronizes. Cannot be combined with `--force`. |
+| `--close-browsers` | No | Force-terminates detected write-target browser process trees, verifies closure, then synchronizes. Cannot be combined with `--force`. |
 | `--restore-backup` | Restore | Raw JSON recovery snapshot to restore. |
 | `--restore-browser` | Restore | Target browser: `Chrome` or `Edge`. |
 | `--log-file` | No | Overrides the private count-only log path. |
@@ -462,25 +492,26 @@ If no CLI operation is supplied, the application opens the GUI. Direct CLI opera
 
 ## Backup files
 
-Each run creates one portable HTML backup, two raw JSON recovery snapshots, a SHA-256 manifest, and a privacy-safe log in the backup directory:
+Each run creates one portable HTML backup, two raw JSON recovery snapshots, a SHA-256 manifest, and a privacy-safe log in the backup directory. An enabled Firefox run also creates a consistent SQLite recovery snapshot:
 
 ```text
 Chrome_YYYY-MM-DD_HH-MM-SS_microseconds.json
 Edge_YYYY-MM-DD_HH-MM-SS_microseconds.json
+Firefox_YYYY-MM-DD_HH-MM-SS_microseconds.sqlite  # only when Firefox is enabled
 Bookmarks_YYYY-MM-DD_HH-MM-SS_microseconds.html
 Manifest_YYYY-MM-DD_HH-MM-SS_microseconds.json
 browser-bookmark-tool.log
 ```
 
-The HTML file is the portable bookmark backup. It contains the merged collection and can be imported into browsers that support Netscape bookmark HTML. The Chrome and Edge JSON files are retained as recovery snapshots because HTML does not preserve all Chromium bookmark metadata. The manifest records file names, sizes, SHA-256 hashes, and count-only operation data. The tool validates the manifest before retention pruning and can independently verify a selected recovery snapshot against its matching manifest before restore.
+The HTML file is the portable bookmark backup. It contains the merged collection and can be imported into browsers that support Netscape bookmark HTML. Chrome and Edge JSON files retain Chromium recovery metadata. `Firefox_*.sqlite` is a complete SQLite backup created through SQLite's backup API, including committed WAL data. The manifest records file names, sizes, SHA-256 hashes, and count-only operation data. The tool validates the manifest before retention pruning and can independently verify a selected Chromium recovery snapshot against its matching manifest before restore.
 
-Retention is applied separately to Chrome JSON recovery snapshots, Edge JSON recovery snapshots, merged HTML backups, and manifests. The tool accepts 1 through 50 backup sets and defaults to 50. Microsecond timestamps prevent repeated runs during the same second from overwriting earlier files. The append-only operation log and pre-restore recovery files are not pruned automatically.
+Retention is applied separately to Chrome JSON recovery snapshots, Edge JSON recovery snapshots, Firefox SQLite recovery snapshots, merged HTML backups, and manifests. The tool accepts 1 through 50 backup sets and defaults to 50. Microsecond timestamps prevent repeated runs during the same second from overwriting earlier files. The append-only operation log and pre-restore recovery files are not pruned automatically.
 
-Retention is ordered by the timestamp in each generated filename. It does not rely on file modification times, which raw browser copies can inherit from the source file. Pruning only removes regular files that match the tool's generated Chrome JSON, Edge JSON, Bookmarks HTML, or Manifest JSON naming format.
+Retention is ordered by the timestamp in each generated filename. It does not rely on file modification times, which raw browser copies can inherit from the source file. Pruning only removes regular files that match the tool's generated Chrome JSON, Edge JSON, Firefox SQLite, Bookmarks HTML, or Manifest JSON naming format.
 
 ## Privacy and security
 
-Bookmark files, backups, profile mappings, automation configurations, and private scheduler outputs can expose browsing history, internal URLs, access tokens embedded in URLs, usernames, and private filesystem paths. Store them outside the repository and do not attach real data to issues, prompts, pull requests, or cloud artifacts. The project `.gitignore` blocks standard Chromium bookmark files, generated backups, logs, restore snapshots, task scripts, private profile mappings, automation results, health histories, and lock files as a secondary safeguard. Notification commands must obtain credentials from a private local mechanism instead of command arguments. Only the sanitized mapping and automation examples belong in Git.
+Bookmark files, Firefox `places.sqlite` databases, backups, profile mappings, automation configurations, and private scheduler outputs can expose browsing history, internal URLs, access tokens embedded in URLs, usernames, and private filesystem paths. Store them outside the repository and do not attach real data to issues, prompts, pull requests, or cloud artifacts. The project `.gitignore` blocks browser bookmark files, generated backups, logs, restore snapshots, task scripts, private profile mappings, automation results, health histories, and lock files as a secondary safeguard. Notification commands must obtain credentials from a private local mechanism instead of command arguments. Only the sanitized mapping and automation examples belong in Git.
 
 Report security vulnerabilities privately through GitHub. See the [security policy](SECURITY.md) for the reporting process and evidence requirements.
 
@@ -506,7 +537,9 @@ Do not restore a Chrome backup into Edge or an Edge backup into Chrome unless yo
 
 - The tool closes browsers only when the CLI `--close-browsers` option is explicitly used.
 - Automatic closure uses forceful process-tree termination and is available only through the explicit `--close-browsers` CLI option.
-- Only standard `Default` and `Profile *` profile directory names are auto-detected.
+- Chromium auto-detection is limited to standard `Default` and `Profile *` directory names. Firefox uses explicit `profiles.ini` entries.
+- Firefox export supports current Places schemas that contain the required bookmark, URL hash, GUID, timestamp, and Sync metadata columns. An unsupported schema fails before live replacement.
+- Firefox export adds missing URLs to a tool-owned folder. It does not mirror Chromium folder layout, propagate deletions, or provide direct Firefox restore. Preserve `Firefox_*.sqlite` for manual recovery while Firefox is closed.
 - Deletions are intentionally not synchronized.
 - Duplicate removal and alphabetization are disabled by default.
 - Direct restore requires JSON recovery snapshots. HTML restore uses the browser's import function.
@@ -567,7 +600,7 @@ The repository Actions allowlist still requires full commit SHA pinning. It perm
 
 The project is applying for SignPath Foundation service as a no-cost alternative. Do not add SignPath credentials, actions, or signing steps until the application is approved and SignPath supplies the project configuration. If accepted, replace the Azure-specific signing step in a reviewed pull request while preserving tag validation, manual signing approval, version-metadata enforcement, signature and timestamp checks, checksums, SBOM generation, provenance, and fail-closed publication. Update the repository Actions allowlist only for exact reviewed and full-SHA-pinned dependencies required by that integration.
 
-The current test suite contains 88 passing cases covering conservative and aggressive URL matching, five merge strategies, dry-run reporting, named multi-profile execution, non-destructive backup verification, restore safety, Chromium schema checks, duplicate GUID rejection, SHA-256 manifests, manifest mismatch and path validation, privacy-safe logging, Python and standalone Task Scheduler generation, scheduler configuration, absolute-path enforcement, readiness, active and stale locking, structured results, health history, failure rate limiting and recovery, notification redaction, process-override rejection, the PowerShell automation wrapper, failure artifact reporting, organization, retention, transactional writes, process controls, CLI behavior, and GUI errors.
+The current test suite contains 94 passing cases covering conservative and aggressive cross-browser URL matching, explicit Firefox profile discovery, Firefox Places import and export, Firefox backup ordering and manifests, three-browser rollback, disabled-mode isolation, five merge strategies, dry-run reporting, named multi-profile execution, non-destructive backup verification, restore safety, Chromium schema checks, duplicate GUID rejection, SHA-256 manifests, manifest mismatch and path validation, privacy-safe logging, Task Scheduler generation, scheduler configuration, readiness, locking, structured results, health history, notification controls, organization, retention, transaction and process controls, CLI behavior, and GUI errors.
 
 ## Contributing and support
 

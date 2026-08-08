@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import configparser
 import copy
 import csv
 import datetime as dt
@@ -10,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -27,6 +30,8 @@ from urllib.parse import urlsplit, urlunsplit
 APP_NAME = "Browser Bookmark Tool"
 ROOT_NAMES = ("bookmark_bar", "other", "synced")
 BROWSER_PROCESS_NAMES = ("chrome.exe", "msedge.exe")
+FIREFOX_PROCESS_NAME = "firefox.exe"
+SUPPORTED_BROWSER_PROCESS_NAMES = (*BROWSER_PROCESS_NAMES, FIREFOX_PROCESS_NAME)
 MAX_BACKUPS = 50
 DUPLICATE_MODES = ("conservative", "aggressive")
 MERGE_STRATEGIES = ("chrome-wins", "edge-wins", "preserve-both", "merge-folders", "dated-folder")
@@ -47,9 +52,9 @@ AUTOMATION_ERROR_CATEGORIES = (
     "automation",
 )
 BACKUP_NAME_PATTERN = re.compile(
-    r"^(?P<prefix>Chrome|Edge|Bookmarks|Manifest)_"
+    r"^(?P<prefix>Chrome|Edge|Firefox|Bookmarks|Manifest)_"
     r"(?P<stamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:_\d{6})?)"
-    r"\.(?P<extension>json|html)$"
+    r"\.(?P<extension>json|sqlite|html)$"
 )
 
 
@@ -57,6 +62,13 @@ def local_app_data() -> Path:
     value = os.environ.get("LOCALAPPDATA")
     if not value:
         raise RuntimeError("LOCALAPPDATA is unavailable. This app currently supports Windows.")
+    return Path(value)
+
+
+def roaming_app_data() -> Path:
+    value = os.environ.get("APPDATA")
+    if not value:
+        raise RuntimeError("APPDATA is unavailable. Firefox profile discovery currently supports Windows.")
     return Path(value)
 
 
@@ -78,6 +90,33 @@ def discover_profiles(browser: str) -> list[Path]:
         return []
     candidates = [p for p in base.iterdir() if p.is_dir() and (p.name == "Default" or p.name.startswith("Profile "))]
     return sorted((p for p in candidates if (p / "Bookmarks").exists()), key=lambda p: (p.name != "Default", p.name))
+
+
+def discover_firefox_profiles(profiles_ini: Path | None = None) -> list[Path]:
+    source = profiles_ini or roaming_app_data() / "Mozilla" / "Firefox" / "profiles.ini"
+    if not source.is_file():
+        return []
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        with source.open(encoding="utf-8-sig") as stream:
+            parser.read_file(stream)
+    except (OSError, configparser.Error) as exc:
+        raise RuntimeError(f"Could not read Firefox profile discovery file {source}.") from exc
+    profiles: list[tuple[bool, str, Path]] = []
+    for section in parser.sections():
+        if not section.casefold().startswith("profile") or not parser.has_option(section, "Path"):
+            continue
+        raw_path = parser.get(section, "Path").strip()
+        if not raw_path:
+            continue
+        relative = parser.get(section, "IsRelative", fallback="1").strip() != "0"
+        path = Path(raw_path)
+        if relative:
+            path = source.parent / path
+        path = path.expanduser().resolve()
+        if (path / "places.sqlite").is_file():
+            profiles.append((parser.get(section, "Default", fallback="0").strip() == "1", section, path))
+    return [path for _default, _section, path in sorted(profiles, key=lambda item: (not item[0], item[1].casefold()))]
 
 
 def running_browser_processes() -> list[str]:
@@ -102,9 +141,27 @@ def running_browser_processes() -> list[str]:
     return [name for name in BROWSER_PROCESS_NAMES if name in running]
 
 
+def running_firefox_processes() -> list[str]:
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            check=False,
+        )
+    except OSError as exc:
+        raise RuntimeError("Firefox process detection failed. Use --force only if Firefox is closed.") from exc
+    if result.returncode != 0:
+        detail = result.stderr.strip() or "tasklist returned an error"
+        raise RuntimeError(f"Firefox process detection failed: {detail}. Use --force only if Firefox is closed.")
+    running = {row[0].lstrip("\ufeff").casefold() for row in csv.reader(result.stdout.splitlines()) if row}
+    return [FIREFOX_PROCESS_NAME] if FIREFOX_PROCESS_NAME in running else []
+
+
 def close_browser_processes(processes: Iterable[str]) -> None:
     requested = {process.casefold() for process in processes}
-    for process in BROWSER_PROCESS_NAMES:
+    for process in SUPPORTED_BROWSER_PROCESS_NAMES:
         if process not in requested:
             continue
         try:
@@ -128,6 +185,15 @@ def wait_for_browsers_to_close(timeout: float = 10.0) -> list[str]:
         time.sleep(0.25)
 
 
+def wait_for_firefox_to_close(timeout: float = 10.0) -> list[str]:
+    deadline = time.monotonic() + timeout
+    while True:
+        running = running_firefox_processes()
+        if not running or time.monotonic() >= deadline:
+            return running
+        time.sleep(0.25)
+
+
 def backup_retention(value: str) -> int:
     try:
         keep = int(value)
@@ -144,6 +210,7 @@ class ProfileMapping:
     chrome_profile: Path
     edge_profile: Path
     backup_dir: Path
+    firefox_profile: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -158,6 +225,8 @@ class AutomationConfig:
     duplicate_mode: str
     merge_strategy: str
     browser_behavior: str
+    firefox_enabled: bool
+    firefox_export: bool
     result_file: Path
     lock_file: Path
     lock_timeout_minutes: int
@@ -201,9 +270,13 @@ def load_automation_config(path: Path) -> AutomationConfig:
     keep_value = document.get("keep", MAX_BACKUPS)
     if isinstance(keep_value, bool) or not isinstance(keep_value, int) or not 1 <= keep_value <= MAX_BACKUPS:
         raise RuntimeError(f"Automation keep must be a number from 1 to {MAX_BACKUPS}.")
-    for option in ("deduplicate", "alphabetize"):
+    for option in ("deduplicate", "alphabetize", "firefox_enabled", "firefox_export"):
         if not isinstance(document.get(option, False), bool):
             raise RuntimeError(f"Automation {option} must be true or false.")
+    if document.get("firefox_export", False) and not document.get("firefox_enabled", False):
+        raise RuntimeError("Automation firefox_export requires firefox_enabled.")
+    if document.get("firefox_export", False) and operation != "sync":
+        raise RuntimeError("Automation firefox_export can be true only when operation is sync.")
 
     duplicate_mode = document.get("duplicate_mode", "conservative")
     if duplicate_mode not in DUPLICATE_MODES:
@@ -270,6 +343,8 @@ def load_automation_config(path: Path) -> AutomationConfig:
         duplicate_mode=duplicate_mode,
         merge_strategy=merge_strategy,
         browser_behavior=browser_behavior,
+        firefox_enabled=document.get("firefox_enabled", False),
+        firefox_export=document.get("firefox_export", False),
         result_file=result_file,
         lock_file=lock_file,
         lock_timeout_minutes=lock_timeout,
@@ -366,6 +441,7 @@ def load_profile_mappings(path: Path) -> dict[str, ProfileMapping]:
                 chrome_profile=Path(item["chrome_profile"]),
                 edge_profile=Path(item["edge_profile"]),
                 backup_dir=Path(item["backup_dir"]),
+                firefox_profile=(Path(item["firefox_profile"]) if item.get("firefox_profile") else None),
             )
         except (KeyError, TypeError) as exc:
             raise RuntimeError(f"A profile mapping in {path} is incomplete.") from exc
@@ -389,6 +465,7 @@ def save_profile_mapping(path: Path, mapping: ProfileMapping) -> None:
                 "chrome_profile": str(item.chrome_profile),
                 "edge_profile": str(item.edge_profile),
                 "backup_dir": str(item.backup_dir),
+                **({"firefox_profile": str(item.firefox_profile)} if item.firefox_profile else {}),
             }
             for item in sorted(existing.values(), key=lambda value: value.name.casefold())
         ]
@@ -419,7 +496,7 @@ def write_backup_manifest(
         "files": entries,
     }
     if preview is not None:
-        document["summary"] = {
+        summary = {
             "chrome_count": preview.chrome_count,
             "edge_count": preview.edge_count,
             "merged_count": preview.merged_count,
@@ -427,6 +504,9 @@ def write_backup_manifest(
             "merge_strategy": preview.merge_strategy,
             "duplicate_mode": preview.duplicate_mode,
         }
+        if preview.firefox_enabled:
+            summary["firefox_count"] = preview.firefox_count
+        document["summary"] = summary
     destination.write_text(json.dumps(document, indent=2), encoding="utf-8")
     validate_backup_manifest(destination)
     return destination
@@ -607,9 +687,13 @@ def write_task_scheduler_script(
     task_name: str,
     task_time: str,
     synchronize_task: bool = False,
+    firefox_profile: Path | None = None,
+    firefox_export: bool = False,
 ) -> Path:
     if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", task_time):
         raise RuntimeError("Task time must use 24-hour HH:MM format.")
+    if firefox_export and (not firefox_profile or not synchronize_task):
+        raise RuntimeError("Firefox task export requires a Firefox profile and synchronization opt in.")
     frozen = bool(getattr(sys, "frozen", False))
     executable = sys.executable if frozen else "py"
     arguments = ([] if frozen else ["-m", "browser_bookmark_sync"]) + [
@@ -622,8 +706,12 @@ def write_task_scheduler_script(
         "--keep",
         str(MAX_BACKUPS),
     ]
+    if firefox_profile:
+        arguments.extend(["--firefox-profile", str(firefox_profile)])
     if synchronize_task:
         arguments.append("--sync")
+        if firefox_export:
+            arguments.append("--firefox-export")
     argument_text = subprocess.list2cmdline(arguments).replace("'", "''")
     executable_text = executable.replace("'", "''")
     task_name_text = task_name.replace("'", "''")
@@ -646,6 +734,299 @@ def read_bookmarks(profile: Path) -> dict[str, Any]:
         raise RuntimeError(f"No Bookmarks file exists in {profile}") from exc
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"The Bookmarks file in {profile} is not valid JSON") from exc
+
+
+def firefox_database(profile: Path) -> Path:
+    path = profile / "places.sqlite"
+    if not path.is_file():
+        raise RuntimeError(f"No places.sqlite file exists in Firefox profile {profile}")
+    return path
+
+
+def firefox_table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")}
+
+
+def validate_firefox_schema(connection: sqlite3.Connection) -> None:
+    place_columns = firefox_table_columns(connection, "moz_places")
+    bookmark_columns = firefox_table_columns(connection, "moz_bookmarks")
+    if not {
+        "id",
+        "url",
+        "url_hash",
+        "title",
+        "rev_host",
+        "hidden",
+        "typed",
+        "frecency",
+        "guid",
+        "foreign_count",
+    }.issubset(place_columns):
+        raise RuntimeError("The Firefox places.sqlite file has an unsupported moz_places schema.")
+    if not {
+        "id",
+        "type",
+        "fk",
+        "parent",
+        "position",
+        "title",
+        "dateAdded",
+        "lastModified",
+        "guid",
+        "syncStatus",
+        "syncChangeCounter",
+    }.issubset(bookmark_columns):
+        raise RuntimeError("The Firefox places.sqlite file has an unsupported moz_bookmarks schema.")
+    if "place_id" not in firefox_table_columns(connection, "moz_keywords"):
+        raise RuntimeError("The Firefox places.sqlite file has an unsupported moz_keywords schema.")
+    root_guids = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT guid FROM moz_bookmarks WHERE guid IN ('toolbar_____', 'menu________', 'unfiled_____', 'mobile______')"
+        )
+    }
+    if not {"toolbar_____", "menu________", "unfiled_____"}.issubset(root_guids):
+        raise RuntimeError("The Firefox places.sqlite file is missing required bookmark roots.")
+
+
+def read_firefox_database(path: Path) -> dict[str, Any]:
+    try:
+        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Could not open Firefox bookmark database {path}.") from exc
+    try:
+        validate_firefox_schema(connection)
+        rows = list(
+            connection.execute(
+                "SELECT b.id, b.type, b.parent, b.position, b.title, b.guid, p.url "
+                "FROM moz_bookmarks b LEFT JOIN moz_places p ON p.id = b.fk "
+                "ORDER BY b.parent, b.position, b.id"
+            )
+        )
+        root_ids = {
+            str(guid): int(identifier)
+            for identifier, guid in connection.execute(
+                "SELECT id, guid FROM moz_bookmarks "
+                "WHERE guid IN ('toolbar_____', 'menu________', 'unfiled_____', 'mobile______')"
+            )
+        }
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Could not read Firefox bookmarks from {path}.") from exc
+    finally:
+        connection.close()
+
+    children: dict[int, list[tuple[Any, ...]]] = {}
+    for row in rows:
+        children.setdefault(int(row[2]), []).append(row)
+
+    def build(parent: int, ancestors: set[int]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for identifier, item_type, _parent, _position, title, guid, url in children.get(parent, []):
+            identifier = int(identifier)
+            if identifier in ancestors:
+                raise RuntimeError(f"Firefox bookmark database {path} contains a folder cycle.")
+            if item_type == 1 and url:
+                result.append(
+                    {
+                        "type": "url",
+                        "id": str(identifier),
+                        "guid": str(guid or ""),
+                        "name": str(title or url),
+                        "url": str(url),
+                    }
+                )
+            elif item_type == 2:
+                result.append(
+                    {
+                        "type": "folder",
+                        "id": str(identifier),
+                        "guid": str(guid or ""),
+                        "name": str(title or "Folder"),
+                        "children": build(identifier, ancestors | {identifier}),
+                    }
+                )
+        return result
+
+    other_children: list[dict[str, Any]] = []
+    for guid in ("menu________", "unfiled_____", "mobile______"):
+        if guid in root_ids:
+            other_children.extend(build(root_ids[guid], {root_ids[guid]}))
+    return {
+        "roots": {
+            "bookmark_bar": {
+                "type": "folder",
+                "id": "1",
+                "name": "Bookmarks Toolbar",
+                "children": build(root_ids["toolbar_____"], {root_ids["toolbar_____"]}),
+            },
+            "other": {"type": "folder", "id": "2", "name": "Other Bookmarks", "children": other_children},
+            "synced": {"type": "folder", "id": "3", "name": "Mobile Bookmarks", "children": []},
+        },
+        "version": 1,
+    }
+
+
+def read_firefox_bookmarks(profile: Path) -> dict[str, Any]:
+    return read_firefox_database(firefox_database(profile))
+
+
+def firefox_guid() -> str:
+    return base64.urlsafe_b64encode(os.urandom(9)).decode("ascii").rstrip("=")
+
+
+def places_url_hash(url: str) -> int:
+    raw = url.encode("utf-8")[:1500]
+
+    def hash_bytes(value: bytes) -> int:
+        result = 0
+        for byte in value:
+            result = (((result << 5) | (result >> 27)) ^ byte) & 0xFFFFFFFF
+            result = (result * 0x9E3779B9) & 0xFFFFFFFF
+        return result
+
+    url_hash = hash_bytes(raw)
+    colon = raw[:50].find(b":")
+    if colon >= 0:
+        return ((hash_bytes(raw[:colon]) & 0xFFFF) << 32) + url_hash
+    return url_hash
+
+
+def backup_firefox_database(profile: Path, destination: Path) -> Path:
+    source_path = firefox_database(profile)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source = sqlite3.connect(f"{source_path.resolve().as_uri()}?mode=ro", uri=True)
+    target = sqlite3.connect(destination)
+    try:
+        source.backup(target)
+        if target.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+            raise RuntimeError("The Firefox backup did not pass SQLite integrity validation.")
+        target.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Could not back up Firefox bookmark database {source_path}.") from exc
+    finally:
+        target.close()
+        source.close()
+    return destination
+
+
+def prepare_firefox_write(
+    profile: Path,
+    backup_path: Path,
+    merged: dict[str, Any],
+    duplicate_mode: str,
+) -> tuple[Path, int]:
+    live_path = firefox_database(profile)
+    descriptor, temporary = tempfile.mkstemp(prefix="places.pending.", suffix=".sqlite", dir=live_path.parent)
+    os.close(descriptor)
+    staged = Path(temporary)
+    shutil.copy2(backup_path, staged)
+    added = 0
+    try:
+        connection = sqlite3.connect(staged)
+        try:
+            validate_firefox_schema(connection)
+            existing_bookmark_urls = [
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT p.url FROM moz_bookmarks b JOIN moz_places p ON p.id = b.fk WHERE b.type = 1"
+                )
+            ]
+            known = {normalized_url(url, duplicate_mode) for url in existing_bookmark_urls}
+            candidates: list[dict[str, Any]] = []
+            for root in merged.get("roots", {}).values():
+                for node in iter_urls(root):
+                    key = normalized_url(str(node["url"]), duplicate_mode)
+                    if key not in known:
+                        known.add(key)
+                        candidates.append(node)
+            if candidates:
+                unfiled = connection.execute(
+                    "SELECT id FROM moz_bookmarks WHERE guid = 'unfiled_____'"
+                ).fetchone()
+                if unfiled is None:
+                    raise RuntimeError("The Firefox bookmark database is missing the Other Bookmarks root.")
+                unfiled_id = int(unfiled[0])
+                folder = connection.execute(
+                    "SELECT id FROM moz_bookmarks WHERE parent = ? AND type = 2 AND title = ? ORDER BY id LIMIT 1",
+                    (unfiled_id, APP_NAME),
+                ).fetchone()
+                now = int(time.time() * 1_000_000) // 1000 * 1000
+                if folder is None:
+                    folder_position = int(
+                        connection.execute(
+                            "SELECT COALESCE(MAX(position), -1) + 1 FROM moz_bookmarks WHERE parent = ?",
+                            (unfiled_id,),
+                        ).fetchone()[0]
+                    )
+                    connection.execute(
+                        "INSERT INTO moz_bookmarks "
+                        "(type, fk, parent, position, title, dateAdded, lastModified, guid, syncStatus, syncChangeCounter) "
+                        "VALUES (2, NULL, ?, ?, ?, ?, ?, ?, 1, 1)",
+                        (unfiled_id, folder_position, APP_NAME, now, now, firefox_guid()),
+                    )
+                    folder_id = int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+                else:
+                    folder_id = int(folder[0])
+                position = int(
+                    connection.execute(
+                        "SELECT COALESCE(MAX(position), -1) + 1 FROM moz_bookmarks WHERE parent = ?",
+                        (folder_id,),
+                    ).fetchone()[0]
+                )
+                place_ids = {str(url): int(identifier) for identifier, url in connection.execute("SELECT id, url FROM moz_places")}
+                touched_places: set[int] = set()
+                for node in candidates:
+                    url = str(node["url"])
+                    place_id = place_ids.get(url)
+                    if place_id is None:
+                        host = urlsplit(url).hostname or ""
+                        connection.execute(
+                            "INSERT INTO moz_places "
+                            "(url, url_hash, title, rev_host, hidden, typed, frecency, guid, foreign_count) "
+                            "VALUES (?, ?, ?, ?, 0, 0, -1, ?, 0)",
+                            (url, places_url_hash(url), str(node.get("name") or url)[:4096], host[::-1] + "." if host else "", firefox_guid()),
+                        )
+                        place_id = int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+                        place_ids[url] = place_id
+                    connection.execute(
+                        "INSERT INTO moz_bookmarks "
+                        "(type, fk, parent, position, title, dateAdded, lastModified, guid, syncStatus, syncChangeCounter) "
+                        "VALUES (1, ?, ?, ?, ?, ?, ?, ?, 1, 1)",
+                        (place_id, folder_id, position, str(node.get("name") or url)[:4096], now, now, firefox_guid()),
+                    )
+                    position += 1
+                    added += 1
+                    touched_places.add(place_id)
+                for place_id in touched_places:
+                    connection.execute(
+                        "UPDATE moz_places SET foreign_count = "
+                        "(SELECT COUNT(*) FROM moz_bookmarks WHERE fk = moz_places.id) + "
+                        "(SELECT COUNT(*) FROM moz_keywords WHERE place_id = moz_places.id) WHERE id = ?",
+                        (place_id,),
+                    )
+                connection.execute(
+                    "UPDATE moz_bookmarks SET lastModified = ?, syncChangeCounter = syncChangeCounter + 1 WHERE id IN (?, ?)",
+                    (now, folder_id, unfiled_id),
+                )
+            connection.commit()
+            checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if checkpoint and int(checkpoint[0]) != 0:
+                raise RuntimeError("The prepared Firefox database could not be checkpointed.")
+            if connection.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+                raise RuntimeError("The prepared Firefox database did not pass SQLite integrity validation.")
+        finally:
+            connection.close()
+        for suffix in ("-wal", "-shm"):
+            staged.with_name(staged.name + suffix).unlink(missing_ok=True)
+        read_firefox_database(staged)
+        for suffix in ("-wal", "-shm"):
+            staged.with_name(staged.name + suffix).unlink(missing_ok=True)
+        return staged, added
+    except Exception:
+        staged.unlink(missing_ok=True)
+        for suffix in ("-wal", "-shm"):
+            staged.with_name(staged.name + suffix).unlink(missing_ok=True)
+        raise
 
 
 def prepare_json_write(path: Path, data: dict[str, Any]) -> Path:
@@ -711,6 +1092,91 @@ def transactional_json_write(chrome_path: Path, edge_path: Path, data: dict[str,
             edge_staged.unlink(missing_ok=True)
         if chrome_rollback is not None and not preserve_rollback:
             chrome_rollback.unlink(missing_ok=True)
+
+
+def checkpoint_firefox_database(path: Path) -> None:
+    try:
+        connection = sqlite3.connect(path)
+        try:
+            result = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if result and int(result[0]) != 0:
+                raise RuntimeError("Firefox database checkpoint was blocked.")
+        finally:
+            connection.close()
+        for suffix in ("-wal", "-shm"):
+            path.with_name(path.name + suffix).unlink(missing_ok=True)
+    except sqlite3.Error as exc:
+        raise RuntimeError("Could not checkpoint the Firefox bookmark database before replacement.") from exc
+
+
+def transactional_firefox_write(
+    chrome_path: Path,
+    edge_path: Path,
+    firefox_path: Path,
+    data: dict[str, Any],
+    firefox_staged: Path,
+) -> None:
+    chrome_staged = prepare_json_write(chrome_path, data)
+    edge_staged = prepare_json_write(edge_path, data)
+    rollback_paths: dict[str, Path] = {}
+    replaced: list[tuple[str, Path]] = []
+    preserve_rollbacks = False
+    try:
+        for browser, path in (("Chrome", chrome_path), ("Edge", edge_path)):
+            descriptor, temporary = tempfile.mkstemp(prefix="Bookmarks.rollback.", dir=path.parent)
+            os.close(descriptor)
+            rollback_paths[browser] = Path(temporary)
+            shutil.copy2(path, rollback_paths[browser])
+        try:
+            os.replace(chrome_staged, chrome_path)
+            replaced.append(("Chrome", chrome_path))
+            chrome_staged = None
+        except OSError as exc:
+            raise RuntimeError("Could not replace Chrome bookmarks. No browser was changed.") from exc
+        try:
+            os.replace(edge_staged, edge_path)
+            replaced.append(("Edge", edge_path))
+            edge_staged = None
+        except OSError as exc:
+            try:
+                os.replace(rollback_paths["Chrome"], chrome_path)
+                rollback_paths.pop("Chrome")
+            except OSError as rollback_exc:
+                preserve_rollbacks = True
+                raise RuntimeError(
+                    "Could not replace Edge bookmarks or restore Chrome automatically. "
+                    f"The Chrome rollback file is {rollback_paths['Chrome']}."
+                ) from rollback_exc
+            raise RuntimeError("Could not replace Edge bookmarks. Chrome was restored automatically.") from exc
+        try:
+            os.replace(firefox_staged, firefox_path)
+        except OSError as exc:
+            restoration_errors: list[str] = []
+            for browser, path in reversed(replaced):
+                try:
+                    os.replace(rollback_paths[browser], path)
+                    rollback_paths.pop(browser)
+                except OSError:
+                    restoration_errors.append(browser)
+            if restoration_errors:
+                preserve_rollbacks = True
+                names = ", ".join(restoration_errors)
+                raise RuntimeError(
+                    f"Could not replace Firefox bookmarks or restore {names} automatically. "
+                    "The rollback files were preserved in their profile directories."
+                ) from exc
+            raise RuntimeError("Could not replace Firefox bookmarks. Chrome and Edge were restored automatically.") from exc
+    finally:
+        if chrome_staged is not None:
+            chrome_staged.unlink(missing_ok=True)
+        if edge_staged is not None:
+            edge_staged.unlink(missing_ok=True)
+        firefox_staged.unlink(missing_ok=True)
+        for suffix in ("-wal", "-shm"):
+            firefox_staged.with_name(firefox_staged.name + suffix).unlink(missing_ok=True)
+        if not preserve_rollbacks:
+            for rollback in rollback_paths.values():
+                rollback.unlink(missing_ok=True)
 
 
 def iter_urls(node: dict[str, Any]) -> Iterable[dict[str, Any]]:
@@ -980,7 +1446,7 @@ def export_html(data: dict[str, Any], destination: Path) -> int:
 
 
 def prune_backups(directory: Path, keep: int) -> None:
-    groups: dict[str, list[tuple[str, Path]]] = {"Chrome": [], "Edge": [], "Bookmarks": [], "Manifest": []}
+    groups: dict[str, list[tuple[str, Path]]] = {"Chrome": [], "Edge": [], "Firefox": [], "Bookmarks": [], "Manifest": []}
     for path in directory.glob("*"):
         if not path.is_file() or not (match := BACKUP_NAME_PATTERN.fullmatch(path.name)):
             continue
@@ -988,7 +1454,9 @@ def prune_backups(directory: Path, keep: int) -> None:
         extension = match.group("extension")
         if prefix == "Bookmarks" and extension != "html":
             continue
-        if prefix != "Bookmarks" and extension != "json":
+        if prefix == "Firefox" and extension != "sqlite":
+            continue
+        if prefix not in ("Bookmarks", "Firefox") and extension != "json":
             continue
         groups[prefix].append((match.group("stamp"), path))
     for backups in groups.values():
@@ -1009,8 +1477,16 @@ class SyncPreview:
     folders_reordered: int
     merge_strategy: str
     duplicate_mode: str
+    firefox_count: int = 0
+    firefox_only: int = 0
+    firefox_enabled: bool = False
 
     def render(self) -> str:
+        firefox = (
+            f"Firefox bookmarks: {self.firefox_count}\nFirefox-only URLs: {self.firefox_only}\n"
+            if self.firefox_enabled
+            else ""
+        )
         return (
             f"Strategy: {self.merge_strategy}\n"
             f"Duplicate matching: {self.duplicate_mode}\n"
@@ -1018,6 +1494,7 @@ class SyncPreview:
             f"Edge favorites: {self.edge_count}\n"
             f"Chrome-only URLs: {self.chrome_only}\n"
             f"Edge-only URLs: {self.edge_only}\n"
+            f"{firefox}"
             f"Duplicates already in inputs: {self.input_duplicates}\n"
             f"Duplicates removed: {self.duplicates_removed}\n"
             f"Folders added: {self.folders_added}\n"
@@ -1046,6 +1523,7 @@ def prepare_merged_data(
     alphabetize: bool = False,
     duplicate_mode: str = "conservative",
     merge_strategy: str = "chrome-wins",
+    firefox: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], SyncPreview]:
     if merge_strategy not in MERGE_STRATEGIES:
         raise RuntimeError(f"Merge strategy must be one of: {', '.join(MERGE_STRATEGIES)}")
@@ -1053,6 +1531,12 @@ def prepare_merged_data(
     edge_urls = [normalized_url(node["url"], duplicate_mode) for root in edge.get("roots", {}).values() for node in iter_urls(root)]
     chrome_keys = set(chrome_urls)
     edge_keys = set(edge_urls)
+    firefox_urls = (
+        [normalized_url(node["url"], duplicate_mode) for root in firefox.get("roots", {}).values() for node in iter_urls(root)]
+        if firefox is not None
+        else []
+    )
+    firefox_keys = set(firefox_urls)
 
     if merge_strategy == "edge-wins":
         primary, secondary = edge, chrome
@@ -1074,6 +1558,14 @@ def prepare_merged_data(
         wrapper_name=wrapper_name,
         merge_matching_folders=merge_folders,
     )
+    if firefox is not None:
+        merged, _ = merge_bookmarks(
+            merged,
+            firefox,
+            duplicate_mode=duplicate_mode,
+            wrapper_name="Imported from Firefox",
+            merge_matching_folders=merge_folders,
+        )
     duplicates_removed = deduplicate_bookmarks(merged, duplicate_mode) if deduplicate else 0
     folders_reordered = alphabetize_bookmarks(merged) if alphabetize else 0
     preview = SyncPreview(
@@ -1081,13 +1573,20 @@ def prepare_merged_data(
         edge_count=len(edge_urls),
         chrome_only=len(chrome_keys - edge_keys),
         edge_only=len(edge_keys - chrome_keys),
-        input_duplicates=(len(chrome_urls) - len(chrome_keys)) + (len(edge_urls) - len(edge_keys)),
+        input_duplicates=(
+            (len(chrome_urls) - len(chrome_keys))
+            + (len(edge_urls) - len(edge_keys))
+            + (len(firefox_urls) - len(firefox_keys))
+        ),
         duplicates_removed=duplicates_removed,
         merged_count=count_bookmarks(merged),
         folders_added=max(0, count_folders(merged) - primary_folder_count),
         folders_reordered=folders_reordered,
         merge_strategy=merge_strategy,
         duplicate_mode=duplicate_mode,
+        firefox_count=len(firefox_urls),
+        firefox_only=len(firefox_keys - chrome_keys - edge_keys),
+        firefox_enabled=firefox is not None,
     )
     return merged, preview
 
@@ -1099,6 +1598,7 @@ def preview_synchronization(
     alphabetize: bool = False,
     duplicate_mode: str = "conservative",
     merge_strategy: str = "chrome-wins",
+    firefox_profile: Path | None = None,
 ) -> SyncPreview:
     _, preview = prepare_merged_data(
         read_bookmarks(chrome_profile),
@@ -1107,6 +1607,7 @@ def preview_synchronization(
         alphabetize=alphabetize,
         duplicate_mode=duplicate_mode,
         merge_strategy=merge_strategy,
+        firefox=read_firefox_bookmarks(firefox_profile) if firefox_profile else None,
     )
     return preview
 
@@ -1124,6 +1625,8 @@ class SyncResult:
     manifest_path: Path
     log_path: Path
     backup_dir: Path
+    firefox_count: int = 0
+    firefox_added: int = 0
 
 
 def synchronize(
@@ -1140,19 +1643,27 @@ def synchronize(
     merge_strategy: str = "chrome-wins",
     log_file: Path | None = None,
     verbose: bool = False,
+    firefox_profile: Path | None = None,
+    firefox_export: bool = False,
 ) -> SyncResult:
     if not 1 <= keep <= MAX_BACKUPS:
         raise RuntimeError(f"Backup retention must be from 1 to {MAX_BACKUPS}.")
     if force and close_browsers:
         raise RuntimeError("--force and --close-browsers cannot be used together.")
+    if firefox_export and firefox_profile is None:
+        raise RuntimeError("Firefox export requires an enabled Firefox profile.")
     chrome = read_bookmarks(chrome_profile)
     edge = read_bookmarks(edge_profile)
     stamp = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
     backup_dir.mkdir(parents=True, exist_ok=True)
     chrome_backup = backup_dir / f"Chrome_{stamp}.json"
     edge_backup = backup_dir / f"Edge_{stamp}.json"
+    firefox_backup = backup_dir / f"Firefox_{stamp}.sqlite" if firefox_profile else None
     shutil.copy2(chrome_profile / "Bookmarks", chrome_backup)
     shutil.copy2(edge_profile / "Bookmarks", edge_backup)
+    if firefox_profile and firefox_backup:
+        backup_firefox_database(firefox_profile, firefox_backup)
+    firefox = read_firefox_database(firefox_backup) if firefox_backup else None
 
     merged, preview = prepare_merged_data(
         chrome,
@@ -1161,29 +1672,37 @@ def synchronize(
         alphabetize=alphabetize,
         duplicate_mode=duplicate_mode,
         merge_strategy=merge_strategy,
+        firefox=firefox,
     )
     html_path = backup_dir / f"Bookmarks_{stamp}.html"
     merged_count = export_html(merged, html_path)
+    backup_files = [chrome_backup, edge_backup]
+    if firefox_backup:
+        backup_files.append(firefox_backup)
+    backup_files.append(html_path)
     manifest_path = write_backup_manifest(
         backup_dir / f"Manifest_{stamp}.json",
-        [chrome_backup, edge_backup, html_path],
+        backup_files,
         preview,
     )
     log_path = log_file or backup_dir / "browser-bookmark-tool.log"
-    write_privacy_safe_log(
-        log_path,
-        "backup_export_complete",
-        chrome_count=preview.chrome_count,
-        edge_count=preview.edge_count,
-        merged_count=preview.merged_count,
-        manifest=manifest_path.name,
-    )
+    log_details = {
+        "chrome_count": preview.chrome_count,
+        "edge_count": preview.edge_count,
+        "merged_count": preview.merged_count,
+        "manifest": manifest_path.name,
+    }
+    if preview.firefox_enabled:
+        log_details["firefox_count"] = preview.firefox_count
+    write_privacy_safe_log(log_path, "backup_export_complete", **log_details)
     prune_backups(backup_dir, keep)
     closed_processes: tuple[str, ...] = ()
     if write:
         if not force:
             try:
                 running = running_browser_processes()
+                if firefox_export:
+                    running.extend(running_firefox_processes())
             except RuntimeError as exc:
                 raise RuntimeError(
                     f"{exc} Backups and the HTML export were created in {backup_dir}."
@@ -1193,6 +1712,8 @@ def synchronize(
                 close_browser_processes(running)
                 try:
                     running = wait_for_browsers_to_close()
+                    if firefox_export:
+                        running.extend(wait_for_firefox_to_close())
                 except RuntimeError as exc:
                     raise RuntimeError(
                         f"{exc} Backups and the HTML export were created in {backup_dir}."
@@ -1211,7 +1732,25 @@ def synchronize(
                     f"Close them completely and try again. Backups and the HTML export were created in "
                     f"{backup_dir}. HTML: {html_path}"
                 )
-        transactional_json_write(chrome_profile / "Bookmarks", edge_profile / "Bookmarks", merged)
+        firefox_added = 0
+        if firefox_export and firefox_profile and firefox_backup:
+            firefox_staged, firefox_added = prepare_firefox_write(
+                firefox_profile,
+                firefox_backup,
+                merged,
+                duplicate_mode,
+            )
+            firefox_path = firefox_database(firefox_profile)
+            checkpoint_firefox_database(firefox_path)
+            transactional_firefox_write(
+                chrome_profile / "Bookmarks",
+                edge_profile / "Bookmarks",
+                firefox_path,
+                merged,
+                firefox_staged,
+            )
+        else:
+            transactional_json_write(chrome_profile / "Bookmarks", edge_profile / "Bookmarks", merged)
         write_privacy_safe_log(
             log_path,
             "sync_complete",
@@ -1219,7 +1758,9 @@ def synchronize(
             duplicates_removed=preview.duplicates_removed,
             strategy=merge_strategy,
         )
-    elif verbose:
+    else:
+        firefox_added = 0
+    if not write and verbose:
         write_privacy_safe_log(log_path, "verbose_summary", folders_added=preview.folders_added, folders_reordered=preview.folders_reordered)
     return SyncResult(
         chrome_count=preview.chrome_count,
@@ -1233,6 +1774,8 @@ def synchronize(
         manifest_path=manifest_path,
         log_path=log_path,
         backup_dir=backup_dir,
+        firefox_count=preview.firefox_count,
+        firefox_added=firefox_added,
     )
 
 
@@ -1246,9 +1789,16 @@ def selected_automation_mappings(config: AutomationConfig) -> list[ProfileMappin
     if any(
         not path.is_absolute()
         for mapping in selected
-        for path in (mapping.chrome_profile, mapping.edge_profile, mapping.backup_dir)
+        for path in (
+            mapping.chrome_profile,
+            mapping.edge_profile,
+            mapping.backup_dir,
+            *((mapping.firefox_profile,) if config.firefox_enabled and mapping.firefox_profile else ()),
+        )
     ):
         raise RuntimeError("Automation profile mappings must use absolute browser and backup paths.")
+    if config.firefox_enabled and any(mapping.firefox_profile is None for mapping in selected):
+        raise RuntimeError("Firefox is enabled but a selected profile mapping has no firefox_profile.")
     return selected
 
 
@@ -1273,11 +1823,13 @@ def safe_automation_error(exc: Exception) -> str:
     if "process detection" in folded:
         return "Browser process detection is unavailable."
     if "browser process" in folded or "synchronization blocked" in folded:
-        detected = [process for process in BROWSER_PROCESS_NAMES if process in folded]
+        detected = [process for process in SUPPORTED_BROWSER_PROCESS_NAMES if process in folded]
         suffix = f": {', '.join(detected)}" if detected else ""
         return f"Synchronization was blocked by running browser processes{suffix}."
     if "no bookmarks file" in folded:
         return "A configured browser profile does not contain a Bookmarks file."
+    if "no places.sqlite file" in folded:
+        return "A configured Firefox profile does not contain a places.sqlite file."
     if "not valid json" in folded:
         return "A configured browser bookmark file is not valid JSON."
     if "unknown automation mapping" in folded:
@@ -1293,6 +1845,8 @@ HEALTH_COUNT_FIELDS = (
     "mapping_failed",
     "chrome_bookmarks",
     "edge_bookmarks",
+    "firefox_bookmarks",
+    "firefox_bookmarks_added",
     "merged_bookmarks",
     "duplicates_removed",
     "folders_added",
@@ -1313,7 +1867,7 @@ def automation_error_category(error: str) -> str:
         return "browser_running"
     if "profile mapping" in folded or "automation configuration" in folded or "unknown automation mapping" in folded:
         return "configuration"
-    if "does not contain a bookmarks file" in folded:
+    if "does not contain a bookmarks file" in folded or "does not contain a places.sqlite file" in folded:
         return "profile_missing"
     if "not valid json" in folded:
         return "bookmark_json"
@@ -1348,7 +1902,7 @@ def sanitize_health_record(record: dict[str, Any]) -> dict[str, Any]:
             if isinstance((value := counts.get(name)), int) and not isinstance(value, bool) and value >= 0
         },
         "duration_seconds": duration_seconds,
-        "processes": [name for name in BROWSER_PROCESS_NAMES if name in processes],
+        "processes": [name for name in SUPPORTED_BROWSER_PROCESS_NAMES if name in processes],
         "error_category": (
             record.get("error_category")
             if record.get("error_category") in AUTOMATION_ERROR_CATEGORIES
@@ -1386,11 +1940,21 @@ def automation_health_record(
     ]
     mapping_names = result_names or list(config.mappings)
 
-    counts = {name: 0 for name in HEALTH_COUNT_FIELDS}
+    firefox_fields_present = any(
+        isinstance(result, dict) and ("firefox_count" in result or "firefox_added" in result)
+        for result in results
+    )
+    counts = {
+        name: 0
+        for name in HEALTH_COUNT_FIELDS
+        if firefox_fields_present or name not in ("firefox_bookmarks", "firefox_bookmarks_added")
+    }
     counts["mapping_total"] = len(mapping_names)
     numeric_fields = {
         "chrome_count": "chrome_bookmarks",
         "edge_count": "edge_bookmarks",
+        "firefox_count": "firefox_bookmarks",
+        "firefox_added": "firefox_bookmarks_added",
         "merged_count": "merged_bookmarks",
         "duplicates_removed": "duplicates_removed",
         "folders_added": "folders_added",
@@ -1413,12 +1977,12 @@ def automation_health_record(
         for source, destination in numeric_fields.items():
             value = result.get(source)
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                counts[destination] += value
+                counts[destination] = counts.get(destination, 0) + value
         for source, destination in boolean_fields.items():
             counts[destination] += int(result.get(source) is True)
         closed = result.get("browsers_closed", [])
         if isinstance(closed, list):
-            processes.update(name for name in closed if name in BROWSER_PROCESS_NAMES)
+            processes.update(name for name in closed if name in SUPPORTED_BROWSER_PROCESS_NAMES)
     counts["stale_locks_replaced"] = int(stale_lock_replaced)
 
     error = document.get("error", "")
@@ -1428,7 +1992,7 @@ def automation_health_record(
     else:
         status = "success" if document.get("status") == "success" else "failed"
     folded_error = str(error).casefold()
-    processes.update(name for name in BROWSER_PROCESS_NAMES if name in folded_error)
+    processes.update(name for name in SUPPORTED_BROWSER_PROCESS_NAMES if name in folded_error)
     return sanitize_health_record(
         {
             "operation": config.operation,
@@ -1504,6 +2068,7 @@ def automation_readiness(config: AutomationConfig) -> dict[str, Any]:
                 alphabetize=config.alphabetize,
                 duplicate_mode=config.duplicate_mode,
                 merge_strategy=config.merge_strategy,
+                firefox_profile=mapping.firefox_profile if config.firefox_enabled else None,
             )
         except (OSError, RuntimeError) as exc:
             errors.append(f"{mapping.name}: {safe_automation_error(exc)}")
@@ -1525,6 +2090,8 @@ def automation_readiness(config: AutomationConfig) -> dict[str, Any]:
 
     try:
         processes = running_browser_processes()
+        if config.firefox_enabled and config.firefox_export:
+            processes.extend(running_firefox_processes())
     except RuntimeError:
         processes = []
         errors.append("Browser process detection is unavailable.")
@@ -1554,6 +2121,7 @@ def preview_result(name: str, preview: SyncPreview) -> dict[str, Any]:
         "status": "success",
         "chrome_count": preview.chrome_count,
         "edge_count": preview.edge_count,
+        **({"firefox_count": preview.firefox_count, "firefox_added": 0} if preview.firefox_enabled else {}),
         "merged_count": preview.merged_count,
         "duplicates_removed": preview.duplicates_removed,
         "folders_added": preview.folders_added,
@@ -1572,6 +2140,11 @@ def sync_result(name: str, result: SyncResult, synchronized: bool) -> dict[str, 
         "status": "success",
         "chrome_count": result.chrome_count,
         "edge_count": result.edge_count,
+        **(
+            {"firefox_count": result.firefox_count, "firefox_added": result.firefox_added}
+            if result.preview.firefox_enabled
+            else {}
+        ),
         "merged_count": result.merged_count,
         "duplicates_removed": result.duplicates_removed,
         "folders_added": result.preview.folders_added,
@@ -1585,7 +2158,7 @@ def sync_result(name: str, result: SyncResult, synchronized: bool) -> dict[str, 
 
 
 def automation_artifact_names(backup_dir: Path) -> dict[str, set[str]]:
-    artifacts = {prefix: set() for prefix in ("Chrome", "Edge", "Bookmarks", "Manifest")}
+    artifacts = {prefix: set() for prefix in ("Chrome", "Edge", "Firefox", "Bookmarks", "Manifest")}
     if not backup_dir.is_dir():
         return artifacts
     for path in backup_dir.iterdir():
@@ -1641,6 +2214,7 @@ def run_automation(config: AutomationConfig) -> tuple[int, dict[str, Any]]:
                         alphabetize=config.alphabetize,
                         duplicate_mode=config.duplicate_mode,
                         merge_strategy=config.merge_strategy,
+                        firefox_profile=mapping.firefox_profile if config.firefox_enabled else None,
                     )
                     mapping_results.append(preview_result(mapping.name, preview))
                     continue
@@ -1650,6 +2224,8 @@ def run_automation(config: AutomationConfig) -> tuple[int, dict[str, Any]]:
                         mapping.chrome_profile,
                         mapping.edge_profile,
                         mapping.backup_dir,
+                        firefox_profile=mapping.firefox_profile if config.firefox_enabled else None,
+                        firefox_export=config.firefox_export,
                         keep=config.keep,
                         write=config.operation == "sync",
                         deduplicate=config.deduplicate,
@@ -1663,7 +2239,11 @@ def run_automation(config: AutomationConfig) -> tuple[int, dict[str, Any]]:
                     after = automation_artifact_names(mapping.backup_dir)
                     failure_artifacts = {
                         "backup_created": bool(after["Chrome"] - before["Chrome"])
-                        and bool(after["Edge"] - before["Edge"]),
+                        and bool(after["Edge"] - before["Edge"])
+                        and (
+                            not config.firefox_enabled
+                            or bool(after["Firefox"] - before["Firefox"])
+                        ),
                         "html_created": bool(after["Bookmarks"] - before["Bookmarks"]),
                         "manifest_validated": bool(after["Manifest"] - before["Manifest"]),
                     }
@@ -1711,9 +2291,12 @@ class App(ttk.Frame):
         super().__init__(master, padding=18)
         self.master = master
         master.title(APP_NAME)
-        master.minsize(760, 620)
+        master.minsize(820, 690)
         self.chrome = tk.StringVar()
         self.edge = tk.StringVar()
+        self.firefox = tk.StringVar()
+        self.firefox_enabled = tk.BooleanVar(value=False)
+        self.firefox_export = tk.BooleanVar(value=False)
         self.backups = tk.StringVar(value=str(default_backup_dir()))
         self.keep = tk.IntVar(value=MAX_BACKUPS)
         self.deduplicate = tk.BooleanVar(value=False)
@@ -1727,51 +2310,54 @@ class App(ttk.Frame):
     def _build(self) -> None:
         self.columnconfigure(1, weight=1)
         ttk.Label(self, text=APP_NAME, font=("Segoe UI", 18, "bold")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
-        ttk.Label(self, text="Back up, export, and synchronize Chrome and Edge bookmarks.").grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 18))
+        ttk.Label(self, text="Back up, export, and synchronize Chrome and Edge bookmarks, with optional Firefox support.").grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 18))
         self.chrome_box = self._profile_row(2, "Chrome profile", self.chrome)
         self.edge_box = self._profile_row(3, "Edge profile", self.edge)
-        ttk.Label(self, text="Backup folder").grid(row=4, column=0, sticky="w", pady=8)
-        ttk.Entry(self, textvariable=self.backups).grid(row=4, column=1, sticky="ew", padx=10)
-        ttk.Button(self, text="Browse…", command=self._browse).grid(row=4, column=2)
-        ttk.Label(self, text="Backup sets to keep").grid(row=5, column=0, sticky="w", pady=8)
-        ttk.Spinbox(self, from_=1, to=MAX_BACKUPS, textvariable=self.keep, width=8).grid(row=5, column=1, sticky="w", padx=10)
+        self.firefox_box = self._profile_row(4, "Firefox profile", self.firefox)
+        ttk.Label(self, text="Backup folder").grid(row=5, column=0, sticky="w", pady=8)
+        ttk.Entry(self, textvariable=self.backups).grid(row=5, column=1, sticky="ew", padx=10)
+        ttk.Button(self, text="Browse…", command=self._browse).grid(row=5, column=2)
+        ttk.Label(self, text="Backup sets to keep").grid(row=6, column=0, sticky="w", pady=8)
+        ttk.Spinbox(self, from_=1, to=MAX_BACKUPS, textvariable=self.keep, width=8).grid(row=6, column=1, sticky="w", padx=10)
         options = ttk.Frame(self)
-        options.grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        options.grid(row=7, column=0, columnspan=3, sticky="w", pady=(8, 0))
         ttk.Checkbutton(options, text="Remove duplicate bookmarks", variable=self.deduplicate).pack(side="left")
         ttk.Checkbutton(options, text="Alphabetize bookmarks", variable=self.alphabetize).pack(side="left", padx=16)
-        ttk.Label(self, text="Duplicate matching").grid(row=7, column=0, sticky="w", pady=8)
+        ttk.Checkbutton(options, text="Include Firefox", variable=self.firefox_enabled).pack(side="left")
+        ttk.Checkbutton(options, text="Write to Firefox", variable=self.firefox_export).pack(side="left", padx=16)
+        ttk.Label(self, text="Duplicate matching").grid(row=8, column=0, sticky="w", pady=8)
         ttk.Combobox(
             self,
             textvariable=self.duplicate_mode,
             values=DUPLICATE_MODES,
             state="readonly",
             width=20,
-        ).grid(row=7, column=1, sticky="w", padx=10)
-        ttk.Label(self, text="Merge strategy").grid(row=8, column=0, sticky="w", pady=8)
+        ).grid(row=8, column=1, sticky="w", padx=10)
+        ttk.Label(self, text="Merge strategy").grid(row=9, column=0, sticky="w", pady=8)
         ttk.Combobox(
             self,
             textvariable=self.merge_strategy,
             values=MERGE_STRATEGIES,
             state="readonly",
             width=24,
-        ).grid(row=8, column=1, sticky="w", padx=10)
-        note = "Close Chrome and Edge before syncing. A raw backup of each browser is created before any changes are written."
-        ttk.Label(self, text=note, wraplength=700, foreground="#8a4b08").grid(row=9, column=0, columnspan=3, sticky="w", pady=(18, 12))
+        ).grid(row=9, column=1, sticky="w", padx=10)
+        note = "Close every browser selected for writing. Raw Chrome and Edge files and an enabled Firefox database are backed up before changes."
+        ttk.Label(self, text=note, wraplength=760, foreground="#8a4b08").grid(row=10, column=0, columnspan=3, sticky="w", pady=(18, 12))
         buttons = ttk.Frame(self)
-        buttons.grid(row=10, column=0, columnspan=3, sticky="ew")
+        buttons.grid(row=11, column=0, columnspan=3, sticky="ew")
         ttk.Button(buttons, text="Preview Changes", command=self._preview).pack(side="left")
         ttk.Button(buttons, text="Back Up + Export HTML", command=lambda: self._run(False)).pack(side="left")
         ttk.Button(buttons, text="Back Up + Sync", command=lambda: self._run(True)).pack(side="left", padx=8)
         ttk.Button(buttons, text="Open Backup Folder", command=self._open_backups).pack(side="left")
         management = ttk.Frame(self)
-        management.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        management.grid(row=12, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         ttk.Button(management, text="Verify Backup", command=self._verify_backup).pack(side="left")
         ttk.Button(management, text="Restore Chrome", command=lambda: self._restore("Chrome")).pack(side="left", padx=8)
         ttk.Button(management, text="Restore Edge", command=lambda: self._restore("Edge")).pack(side="left")
         ttk.Button(management, text="Save Profile Mapping", command=self._save_mapping).pack(side="left")
         ttk.Button(management, text="Load Profile Mapping", command=self._load_mapping).pack(side="left", padx=8)
-        ttk.Separator(self).grid(row=12, column=0, columnspan=3, sticky="ew", pady=18)
-        ttk.Label(self, textvariable=self.status, wraplength=700).grid(row=13, column=0, columnspan=3, sticky="w")
+        ttk.Separator(self).grid(row=13, column=0, columnspan=3, sticky="ew", pady=18)
+        ttk.Label(self, textvariable=self.status, wraplength=760).grid(row=14, column=0, columnspan=3, sticky="w")
         self.pack(fill="both", expand=True)
 
     def _profile_row(self, row: int, label: str, variable: tk.StringVar) -> ttk.Combobox:
@@ -1790,9 +2376,21 @@ class App(ttk.Frame):
                 self.chrome.set(chrome[0])
             if edge:
                 self.edge.set(edge[0])
-            self.status.set(f"Detected {len(chrome)} Chrome profile(s) and {len(edge)} Edge profile(s).")
         except Exception as exc:
             self.status.set(str(exc))
+            return
+        try:
+            firefox = [str(p) for p in discover_firefox_profiles()]
+            self.firefox_box["values"] = firefox
+            if firefox:
+                self.firefox.set(firefox[0])
+            self.status.set(
+                f"Detected {len(chrome)} Chrome, {len(edge)} Edge, and {len(firefox)} Firefox profile(s). Firefox remains disabled until selected."
+            )
+        except Exception as exc:
+            self.status.set(
+                f"Detected {len(chrome)} Chrome and {len(edge)} Edge profile(s). Firefox remains disabled. {exc}"
+            )
 
     def _browse(self) -> None:
         chosen = filedialog.askdirectory(initialdir=self.backups.get())
@@ -1803,13 +2401,25 @@ class App(ttk.Frame):
         if not self.chrome.get() or not self.edge.get():
             messagebox.showerror(APP_NAME, "Chrome and Edge profiles are required.")
             return
-        if write and not messagebox.askyesno(APP_NAME, "Are Chrome and Edge completely closed?\n\nTheir bookmark files will be synchronized after backups are created."):
+        firefox_enabled = bool(getattr(self, "firefox_enabled", None) and self.firefox_enabled.get())
+        firefox_export = bool(getattr(self, "firefox_export", None) and self.firefox_export.get())
+        firefox_profile = Path(self.firefox.get()) if firefox_enabled and self.firefox.get() else None
+        if firefox_enabled and firefox_profile is None:
+            messagebox.showerror(APP_NAME, "A Firefox profile is required when Firefox support is enabled.")
+            return
+        if firefox_export and not firefox_enabled:
+            messagebox.showerror(APP_NAME, "Enable Firefox before selecting Write to Firefox.")
+            return
+        browser_names = "Chrome, Edge, and Firefox" if firefox_export else "Chrome and Edge"
+        if write and not messagebox.askyesno(APP_NAME, f"Are {browser_names} completely closed?\n\nBookmark data will be synchronized after backups are created."):
             return
         try:
             result = synchronize(
                 Path(self.chrome.get()),
                 Path(self.edge.get()),
                 Path(self.backups.get()),
+                firefox_profile=firefox_profile,
+                firefox_export=firefox_export,
                 keep=self.keep.get(),
                 write=write,
                 deduplicate=self.deduplicate.get(),
@@ -1833,6 +2443,11 @@ class App(ttk.Frame):
         if not self.chrome.get() or not self.edge.get():
             messagebox.showerror(APP_NAME, "Chrome and Edge profiles are required.")
             return
+        firefox_enabled = bool(getattr(self, "firefox_enabled", None) and self.firefox_enabled.get())
+        firefox_profile = Path(self.firefox.get()) if firefox_enabled and self.firefox.get() else None
+        if firefox_enabled and firefox_profile is None:
+            messagebox.showerror(APP_NAME, "A Firefox profile is required when Firefox support is enabled.")
+            return
         try:
             preview = preview_synchronization(
                 Path(self.chrome.get()),
@@ -1841,6 +2456,7 @@ class App(ttk.Frame):
                 alphabetize=self.alphabetize.get(),
                 duplicate_mode=self.duplicate_mode.get(),
                 merge_strategy=self.merge_strategy.get(),
+                firefox_profile=firefox_profile,
             )
             messagebox.showinfo(f"{APP_NAME} Preview", preview.render())
         except Exception as exc:
@@ -1911,7 +2527,13 @@ class App(ttk.Frame):
         try:
             save_profile_mapping(
                 Path(destination),
-                ProfileMapping(name, Path(self.chrome.get()), Path(self.edge.get()), Path(self.backups.get())),
+                ProfileMapping(
+                    name,
+                    Path(self.chrome.get()),
+                    Path(self.edge.get()),
+                    Path(self.backups.get()),
+                    Path(self.firefox.get()) if getattr(self, "firefox_enabled", None) and self.firefox_enabled.get() and self.firefox.get() else None,
+                ),
             )
             messagebox.showinfo(APP_NAME, f"Saved profile mapping: {name}")
         except Exception as exc:
@@ -1932,6 +2554,13 @@ class App(ttk.Frame):
                 raise RuntimeError(f"No mapping named {name} exists in {selected}.")
             self.chrome.set(str(mapping.chrome_profile))
             self.edge.set(str(mapping.edge_profile))
+            if mapping.firefox_profile and hasattr(self, "firefox"):
+                self.firefox.set(str(mapping.firefox_profile))
+                self.firefox_enabled.set(True)
+            elif hasattr(self, "firefox"):
+                self.firefox.set("")
+                self.firefox_enabled.set(False)
+                self.firefox_export.set(False)
             self.backups.set(str(mapping.backup_dir))
             self.status.set(f"Loaded profile mapping: {mapping.name}")
         except Exception as exc:
@@ -1960,6 +2589,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--chrome-profile", type=Path)
     parser.add_argument("--edge-profile", type=Path)
+    parser.add_argument("--firefox-profile", type=Path, help="Explicit Firefox profile to import")
+    parser.add_argument(
+        "--enable-firefox",
+        action="store_true",
+        help="Enable the firefox_profile paths in named profile mappings",
+    )
+    parser.add_argument(
+        "--firefox-export",
+        action="store_true",
+        help="Also write missing merged bookmarks to Firefox during --sync",
+    )
     parser.add_argument("--backup-dir", type=Path, default=default_backup_dir())
     parser.add_argument("--profile-map", type=Path, help="Private JSON file containing named profile mappings")
     parser.add_argument("--mapping", action="append", help="Named mapping to run; repeat for multiple mappings")
@@ -1987,7 +2627,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     process_options.add_argument(
         "--close-browsers",
         action="store_true",
-        help="Force-close Chrome and Edge before synchronization",
+        help="Force-close selected write-target browsers before synchronization",
     )
     parser.add_argument("--gui", action="store_true", help="Open the desktop interface")
     return parser.parse_args(argv)
@@ -1999,6 +2639,9 @@ def main(argv: list[str] | None = None) -> int:
         (
             args.chrome_profile,
             args.edge_profile,
+            args.firefox_profile,
+            args.enable_firefox,
+            args.firefox_export,
             args.profile_map,
             args.restore_backup,
             args.write_task_script,
@@ -2064,6 +2707,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
+        firefox_enabled = args.enable_firefox or args.firefox_profile is not None
+        if args.firefox_export and (
+            not firefox_enabled or (not args.sync and not (args.write_task_script and args.task_sync))
+        ):
+            raise RuntimeError("--firefox-export requires Firefox to be enabled with --sync.")
+        if args.profile_map and args.firefox_profile:
+            raise RuntimeError("--firefox-profile cannot be combined with --profile-map; store the path in the mapping.")
         if args.profile_map:
             available = load_profile_mappings(args.profile_map)
             names = args.mapping or sorted(available)
@@ -2071,10 +2721,14 @@ def main(argv: list[str] | None = None) -> int:
             if missing:
                 raise RuntimeError(f"Unknown profile mapping(s): {', '.join(missing)}")
             mappings = [available[name] for name in names]
+            if firefox_enabled and any(mapping.firefox_profile is None for mapping in mappings):
+                raise RuntimeError("Firefox is enabled but a selected profile mapping has no firefox_profile.")
         else:
             if not args.chrome_profile or not args.edge_profile:
                 raise RuntimeError("Both --chrome-profile and --edge-profile are required.")
-            mappings = [ProfileMapping("direct", args.chrome_profile, args.edge_profile, args.backup_dir)]
+            if firefox_enabled and args.firefox_profile is None:
+                raise RuntimeError("--enable-firefox requires --firefox-profile for a direct run.")
+            mappings = [ProfileMapping("direct", args.chrome_profile, args.edge_profile, args.backup_dir, args.firefox_profile)]
     except RuntimeError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -2113,6 +2767,8 @@ def main(argv: list[str] | None = None) -> int:
             args.task_name,
             args.task_time,
             synchronize_task=args.task_sync,
+            firefox_profile=mapping.firefox_profile if firefox_enabled else None,
+            firefox_export=args.firefox_export,
         )
         print(f"Task Scheduler script: {path}")
         return 0
@@ -2129,6 +2785,7 @@ def main(argv: list[str] | None = None) -> int:
                     alphabetize=args.alphabetize,
                     duplicate_mode=args.duplicate_mode,
                     merge_strategy=args.merge_strategy,
+                    firefox_profile=mapping.firefox_profile if firefox_enabled else None,
                 )
             except RuntimeError as exc:
                 print(f"Error: {exc}", file=sys.stderr)
@@ -2140,6 +2797,8 @@ def main(argv: list[str] | None = None) -> int:
                     mapping.chrome_profile,
                     mapping.edge_profile,
                     mapping.backup_dir,
+                    firefox_profile=mapping.firefox_profile if firefox_enabled else None,
+                    firefox_export=args.firefox_export,
                     keep=args.keep,
                     write=args.sync,
                     deduplicate=args.deduplicate,
@@ -2154,16 +2813,24 @@ def main(argv: list[str] | None = None) -> int:
             except RuntimeError as exc:
                 print(f"Error: {exc}", file=sys.stderr)
                 return 1
-            print(
-                f"Bookmarks: {result.merged_count}\n"
-                f"Duplicates removed: {result.duplicates_removed}\n"
-                f"Alphabetized: {'Yes' if result.alphabetized else 'No'}\n"
-                f"Browsers closed: {', '.join(result.closed_processes) if result.closed_processes else 'No'}\n"
-                f"HTML: {result.html_path}\n"
-                f"Manifest: {result.manifest_path}\n"
-                f"Log: {result.log_path}\n"
-                f"Backups: {result.backup_dir}"
+            output = [f"Bookmarks: {result.merged_count}"]
+            if firefox_enabled:
+                output.append(f"Firefox bookmarks read: {result.firefox_count}")
+                output.append(
+                    f"Firefox bookmarks added: {result.firefox_added if args.firefox_export else 'Disabled'}"
+                )
+            output.extend(
+                [
+                    f"Duplicates removed: {result.duplicates_removed}",
+                    f"Alphabetized: {'Yes' if result.alphabetized else 'No'}",
+                    f"Browsers closed: {', '.join(result.closed_processes) if result.closed_processes else 'No'}",
+                    f"HTML: {result.html_path}",
+                    f"Manifest: {result.manifest_path}",
+                    f"Log: {result.log_path}",
+                    f"Backups: {result.backup_dir}",
+                ]
             )
+            print("\n".join(output))
             if args.verbose:
                 print(result.preview.render())
         if index < len(mappings) - 1:

@@ -107,16 +107,16 @@ Acceptance criteria:
 - Synchronization still enforces browser-process safety per run.
 - Private mapping paths remain excluded from Git.
 
-### FUT-006: Firefox bookmark support
+### FUT-018: Firefox recovery verification and restore
 
-Add optional Firefox import and export support without weakening the current Chrome and Edge transaction guarantees.
+Add isolated verification and explicit restore for the raw Firefox SQLite recovery snapshots created by completed `FUT-006`.
 
 Acceptance criteria:
 
-- Firefox profile discovery is explicit and testable.
-- Firefox data is backed up before any supported write.
-- Cross-browser duplicate matching follows the selected matching mode.
-- Firefox support can be disabled without changing Chrome and Edge behavior.
+- Verification runs against a temporary database copy, validates SQLite integrity and required Places roots, and never opens a live Firefox profile.
+- Restore requires `firefox.exe` to be closed, validates the selected snapshot and its manifest, and preserves the current `places.sqlite` before replacement.
+- WAL and shared-memory sidecars are handled without replaying stale data into the restored database.
+- GUI, CLI, and failure-path tests cover valid, corrupt, mismatched, and unsupported-schema snapshots.
 
 ### FUT-013: macOS Chrome and Edge compatibility
 
