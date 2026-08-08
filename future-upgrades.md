@@ -28,17 +28,6 @@ Acceptance criteria:
 - Signing secrets and certificates are not stored in the repository or build artifacts.
 - The README documents how users verify the signature.
 
-### FUT-002: Automated restore verification
-
-Add a non-destructive verification workflow that restores a selected JSON backup into a temporary profile structure and validates its Chromium schema, GUID uniqueness, and manifest integrity.
-
-Acceptance criteria:
-
-- Verification never replaces a live browser file.
-- Invalid JSON, duplicate GUIDs, and manifest mismatches produce clear failures.
-- GUI and CLI users receive a concise verification report.
-- Tests cover valid, corrupted, and mismatched backups.
-
 ### FUT-003: Signed release packages and checksums
 
 Create versioned release packages containing the executable, documentation, license, and published SHA-256 checksums.
@@ -83,6 +72,18 @@ Acceptance criteria:
 ## Priority 2: Planned
 
 These upgrades improve reporting, multi-profile administration, and browser coverage.
+
+### FUT-017: Backup-set catalog and comparison
+
+Add a read-only GUI and CLI inventory that groups generated Chrome, Edge, HTML, and manifest files into backup sets and compares count-only changes between verified sets.
+
+Acceptance criteria:
+
+- The catalog groups files by generated timestamp and flags missing or extra members without opening live browser profiles.
+- Manifest status, browser type, bookmark count, folder count, and count deltas are available without exposing bookmark names or URLs.
+- Users can filter complete, incomplete, valid, and invalid backup sets in the GUI and CLI.
+- Inventory and comparison never create, rename, replace, or delete backup files.
+- Tests cover complete, incomplete, mismatched, and unrelated-file directories.
 
 ### FUT-004: Machine-readable preview reports
 

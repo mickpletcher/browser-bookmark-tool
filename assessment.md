@@ -6,20 +6,20 @@ Release readiness: Source ready; trusted signing credential required for binary 
 
 ## Summary
 
-The project is a Windows application for previewing, backing up, exporting, restoring, and organizing Chrome bookmarks and Microsoft Edge favorites. Version 0.3.0 combines transactional write and browser-process protections with a vendor-neutral local execution contract, capped privacy-safe health history, optional rate-limited failure notifications, and fail-closed signed release automation. SignPath Foundation application readiness now includes a public code-signing policy, privacy policy, explicit solo-maintainer roles, manual approval requirements, and enforced Windows release metadata. A trusted provider and verified signing integration are still required before the first binary release can be published.
+The project is a Windows application for previewing, backing up, exporting, verifying, restoring, and organizing Chrome bookmarks and Microsoft Edge favorites. Version 0.3.0 combines transactional write and browser-process protections with isolated backup verification, a vendor-neutral local execution contract, capped privacy-safe health history, optional rate-limited failure notifications, and fail-closed signed release automation. SignPath Foundation application readiness includes a public code-signing policy, privacy policy, explicit solo-maintainer roles, manual approval requirements, and enforced Windows release metadata. A trusted provider and verified signing integration are still required before the first binary release can be published.
 
 ## Current status
 
 | Area | Status | Notes |
 | --- | --- | --- |
 | Packaging | Ready | Editable installation, module execution, and the batch launcher command path pass verification. |
-| Automated tests | Passing | All 80 test cases pass on Python 3.13.3 across merge, preview, mapping, restore, integrity, logging, scheduling, automation configuration, path enforcement, locking, structured results, health history, notification suppression and redaction, failure artifact reporting, PowerShell execution, transaction, process, CLI, and GUI paths. |
-| Backup safety | Ready | Every run creates HTML and JSON backups plus a validated SHA-256 manifest. Microsecond timestamps prevent collisions, and filename-based retention ignores unrelated files. |
+| Automated tests | Passing | All 88 test cases pass on Python 3.13.3 across merge, preview, mapping, backup verification, restore, integrity, logging, scheduling, automation configuration, path enforcement, locking, structured results, health history, notification suppression and redaction, failure artifact reporting, PowerShell execution, transaction, process, CLI, and GUI paths. |
+| Backup safety | Ready | Every run creates HTML and JSON backups plus a validated SHA-256 manifest. GUI and CLI verification stage a selected JSON snapshot in a temporary profile, validate Chromium schema and GUIDs, and verify its manifest without accessing live profiles. |
 | Synchronization safety | Ready | Both replacements are prepared and validated before writes. Chrome is restored automatically if the Edge replacement fails. |
 | Bookmark organization | Ready | Duplicate removal and recursive folder-first alphabetization are independently optional in the GUI and CLI. |
 | URL matching | Ready | Conservative matching changes only scheme and host case. Aggressive whole-URL matching and trailing-slash collapse require explicit opt-in. |
 | Merge and preview | Ready | Five strategies are available, and GUI or CLI dry-run reports make no filesystem or browser changes. |
-| Restore | Ready | Chrome and Edge can be restored independently from JSON snapshots after preserving the current file. HTML remains a browser-import format. |
+| Restore | Ready | Chrome and Edge can be restored independently from validated JSON snapshots after preserving the current file. HTML remains a browser-import format. |
 | Multi-profile support | Ready | Private named mapping files separate work and personal profile pairs; CLI runs one, several, or all mappings. |
 | Integrity and logging | Ready | Manifests validate SHA-256 and size before pruning. Default logs contain operation metadata and counts but no bookmark URLs. |
 | Scheduling | Ready | A common local PowerShell entrypoint provides private configuration, no-write readiness checks, atomic locks, privacy-safe JSON results, capped allowlisted health history, disabled-by-default failure notifications, and explicit backup, dry-run, or sync modes. |
@@ -48,6 +48,7 @@ The project is a Windows application for previewing, backing up, exporting, rest
 - Preserves case-sensitive paths and query values under default duplicate matching.
 - Reports planned additions, duplicates, folder changes, and final counts without writing files.
 - Supports independent restore and private named multi-profile workflows.
+- Verifies recovery snapshots in isolated temporary profiles and reports only bookmark counts, folder counts, manifest name, and no-write status.
 - Validates backup integrity and logs count-only operational data.
 - Generates backup-first Task Scheduler scripts and a standalone Windows executable.
 - Embeds and validates Windows product name, version, description, and original-filename metadata in release executables.
@@ -86,8 +87,8 @@ Verified on Windows 11 with Python 3.13.3 on 2026-08-08.
 - `py -m pip install -e .`: passed.
 - `py -m browser_bookmark_sync --help`: passed.
 - `Run Browser Bookmark Tool.bat --help`: passed and reached the application through the Python module.
-- `py -m pytest -q`: passed with 80 cases, including private automation configuration, absolute-path enforcement, readiness, active and stale locks, stale-lock health recovery, backup, dry-run, blocked and browser-closing sync, health allowlisting, repeated-failure suppression, recovery reset, notification redaction, process-override rejection, failure artifact reporting, privacy-safe results, CLI routing, and PowerShell wrapper execution.
-- Python 3.11.9 isolated environment: all 80 tests, Ruff, compilation, and `pip check` passed.
+- `py -m pytest -q`: passed with 88 cases, including valid and corrupt snapshot verification, Chromium schema validation, duplicate GUID rejection, manifest mismatch detection, explicit-manifest selected-file verification, GUI and CLI reports, live-profile preservation, private automation configuration, readiness, locking, backup, dry-run, synchronization, notification redaction, privacy-safe results, CLI routing, and PowerShell wrapper execution.
+- Python 3.11.9 isolated environment: the prior 80-case baseline, Ruff, compilation, and `pip check` passed. The 88-case suite is verified on Python 3.13.3 and awaits CI matrix verification.
 - `py -m ruff check .`: passed with Ruff 0.16.2 and an explicit project rule set.
 - `py -m py_compile browser_bookmark_sync.py test_sync.py`: passed.
 - Package wheel build: passed. The wheel contains only the application module, project metadata, console entry point, and MIT license.
@@ -115,7 +116,7 @@ Actions have read-only default workflow permissions, cannot approve pull request
 - The repository has one active ruleset and a `release` environment restricted to `v*` tags. It has no tags, releases, packages, deployments, webhooks, deploy keys, Azure signing secrets or variables, or collaborators other than the owner.
 - Repository and full-history scans found no provider credential patterns. GitHub secret scanning also reports zero open alerts.
 
-The documentation was reviewed against the current implementation and live GitHub configuration, including local AI scheduling, private configuration, structured results, health history, optional notification delivery, concurrency, repository security, Windows CI status, release metadata, SignPath application readiness, privacy, community health files, and upgrade tracking on 2026-08-08.
+The documentation was reviewed against the current implementation and live GitHub configuration, including isolated backup verification, local AI scheduling, private configuration, structured results, health history, optional notification delivery, concurrency, repository security, Windows CI status, release metadata, SignPath application readiness, privacy, community health files, and upgrade tracking on 2026-08-08.
 
 ## Maintenance requirement
 

@@ -459,6 +459,103 @@ def validate_backup_manifest(path: Path) -> None:
             raise RuntimeError(f"Backup integrity validation failed for {target}.")
 
 
+def validate_chromium_bookmark_schema(data: Any) -> None:
+    if not isinstance(data, dict):
+        raise RuntimeError("The recovery snapshot is not a Chromium bookmark file.")
+    roots = data.get("roots")
+    if not isinstance(roots, dict):
+        raise RuntimeError("The recovery snapshot does not contain a Chromium roots object.")
+    missing = [name for name in ("bookmark_bar", "other") if name not in roots]
+    if missing:
+        raise RuntimeError(f"The recovery snapshot is missing required Chromium root(s): {', '.join(missing)}.")
+
+    def validate_node(node: Any, location: str) -> None:
+        if not isinstance(node, dict):
+            raise RuntimeError(f"The recovery snapshot contains an invalid node at {location}.")
+        node_type = node.get("type")
+        if node_type not in ("folder", "url"):
+            raise RuntimeError(f"The recovery snapshot contains an invalid node type at {location}.")
+        if not isinstance(node.get("id"), str) or not isinstance(node.get("name"), str):
+            raise RuntimeError(f"The recovery snapshot contains invalid Chromium metadata at {location}.")
+        guid = node.get("guid")
+        if guid is not None:
+            if not isinstance(guid, str):
+                raise RuntimeError(f"The recovery snapshot contains an invalid GUID at {location}.")
+            try:
+                uuid.UUID(guid)
+            except ValueError as exc:
+                raise RuntimeError(f"The recovery snapshot contains an invalid GUID at {location}.") from exc
+        if node_type == "url":
+            if not isinstance(node.get("url"), str) or not node["url"]:
+                raise RuntimeError(f"The recovery snapshot contains an invalid URL node at {location}.")
+            return
+        children = node.get("children")
+        if not isinstance(children, list):
+            raise RuntimeError(f"The recovery snapshot contains an invalid folder at {location}.")
+        for index, child in enumerate(children):
+            validate_node(child, f"{location}.children[{index}]")
+
+    for name, root in roots.items():
+        validate_node(root, f"roots.{name}")
+        if root.get("type") != "folder":
+            raise RuntimeError(f"The Chromium root roots.{name} must be a folder.")
+
+
+@dataclass(frozen=True)
+class BackupVerification:
+    backup_path: Path
+    manifest_path: Path
+    bookmark_count: int
+    folder_count: int
+
+    def render(self) -> str:
+        return (
+            "Backup verification passed.\n"
+            f"Bookmarks: {self.bookmark_count}\n"
+            f"Folders: {self.folder_count}\n"
+            f"Manifest: {self.manifest_path.name}\n"
+            "No live browser files were changed."
+        )
+
+
+def matching_backup_manifest(backup_path: Path) -> Path:
+    match = BACKUP_NAME_PATTERN.fullmatch(backup_path.name)
+    if match is None or match.group("prefix") not in ("Chrome", "Edge"):
+        raise RuntimeError("Could not determine the matching manifest from the recovery snapshot name.")
+    return backup_path.parent / f"Manifest_{match.group('stamp')}.json"
+
+
+def verify_json_backup(backup_path: Path, manifest_path: Path | None = None) -> BackupVerification:
+    if backup_path.suffix.casefold() != ".json":
+        raise RuntimeError("Backup verification requires a raw JSON recovery snapshot.")
+    if not backup_path.is_file():
+        raise RuntimeError(f"Recovery snapshot {backup_path} does not exist.")
+    resolved_manifest = manifest_path or matching_backup_manifest(backup_path)
+
+    with tempfile.TemporaryDirectory(prefix="browser-bookmark-verify-") as temporary:
+        profile = Path(temporary) / "Default"
+        profile.mkdir()
+        shutil.copy2(backup_path, profile / "Bookmarks")
+        data = read_bookmarks(profile)
+        validate_chromium_bookmark_schema(data)
+        validate_unique_guids(data)
+
+    validate_backup_manifest(resolved_manifest)
+    manifest = json.loads(resolved_manifest.read_text(encoding="utf-8"))
+    matching_entries = [entry for entry in manifest["files"] if entry["name"] == backup_path.name]
+    if not matching_entries:
+        raise RuntimeError(f"Backup manifest {resolved_manifest} does not reference {backup_path.name}.")
+    entry = matching_entries[0]
+    if backup_path.stat().st_size != entry["size"] or sha256_file(backup_path) != entry["sha256"]:
+        raise RuntimeError(f"Backup integrity validation failed for {backup_path}.")
+    return BackupVerification(
+        backup_path=backup_path,
+        manifest_path=resolved_manifest,
+        bookmark_count=count_bookmarks(data),
+        folder_count=count_folders(data),
+    )
+
+
 def write_privacy_safe_log(path: Path, event: str, **details: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     safe = " ".join(f"{key}={value}" for key, value in sorted(details.items()))
@@ -482,6 +579,8 @@ def restore_json_backup(
         raise RuntimeError(f"Could not read recovery snapshot {backup_path}.") from exc
     if not isinstance(data, dict) or "roots" not in data:
         raise RuntimeError(f"The recovery snapshot {backup_path} is not a Chromium bookmark file.")
+    validate_chromium_bookmark_schema(data)
+    validate_unique_guids(data)
     process = {"Chrome": "chrome.exe", "Edge": "msedge.exe"}[browser]
     if not force and process in running_browser_processes():
         raise RuntimeError(f"Restore blocked because {process} is running.")
@@ -681,7 +780,7 @@ def validate_unique_guids(data: dict[str, Any]) -> None:
             seen.add(key)
     if duplicates:
         values = ", ".join(sorted(duplicates))
-        raise RuntimeError(f"The merged bookmark data contains duplicate GUID values: {values}")
+        raise RuntimeError(f"The bookmark data contains duplicate GUID values: {values}")
 
 
 def deduplicate_bookmarks(data: dict[str, Any], mode: str = "conservative") -> int:
@@ -1666,8 +1765,9 @@ class App(ttk.Frame):
         ttk.Button(buttons, text="Open Backup Folder", command=self._open_backups).pack(side="left")
         management = ttk.Frame(self)
         management.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(10, 0))
-        ttk.Button(management, text="Restore Chrome", command=lambda: self._restore("Chrome")).pack(side="left")
-        ttk.Button(management, text="Restore Edge", command=lambda: self._restore("Edge")).pack(side="left", padx=8)
+        ttk.Button(management, text="Verify Backup", command=self._verify_backup).pack(side="left")
+        ttk.Button(management, text="Restore Chrome", command=lambda: self._restore("Chrome")).pack(side="left", padx=8)
+        ttk.Button(management, text="Restore Edge", command=lambda: self._restore("Edge")).pack(side="left")
         ttk.Button(management, text="Save Profile Mapping", command=self._save_mapping).pack(side="left")
         ttk.Button(management, text="Load Profile Mapping", command=self._load_mapping).pack(side="left", padx=8)
         ttk.Separator(self).grid(row=12, column=0, columnspan=3, sticky="ew", pady=18)
@@ -1750,6 +1850,24 @@ class App(ttk.Frame):
         directory = Path(self.backups.get())
         directory.mkdir(parents=True, exist_ok=True)
         webbrowser.open(directory.as_uri())
+
+    def _verify_backup(self) -> None:
+        selected = filedialog.askopenfilename(
+            initialdir=self.backups.get(),
+            title="Select JSON recovery snapshot to verify",
+            filetypes=[("JSON recovery snapshots", "*.json")],
+        )
+        if not selected:
+            return
+        try:
+            report = verify_json_backup(Path(selected))
+            self.status.set(
+                f"Verified {report.bookmark_count} bookmarks and {report.folder_count} folders. "
+                "No live browser files were changed."
+            )
+            messagebox.showinfo(f"{APP_NAME} Verification", report.render())
+        except Exception as exc:
+            messagebox.showerror(f"{APP_NAME} Verification", str(exc))
 
     def _restore(self, browser: str) -> None:
         profile_value = self.chrome.get() if browser == "Chrome" else self.edge.get()
@@ -1835,6 +1953,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=Path,
         help="Run a private scheduler configuration and write a privacy-safe JSON result",
     )
+    operation_options.add_argument(
+        "--verify-backup",
+        type=Path,
+        help="Verify a raw JSON recovery snapshot without changing browser files",
+    )
     parser.add_argument("--chrome-profile", type=Path)
     parser.add_argument("--edge-profile", type=Path)
     parser.add_argument("--backup-dir", type=Path, default=default_backup_dir())
@@ -1852,6 +1975,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--merge-strategy", choices=MERGE_STRATEGIES, default="chrome-wins")
     parser.add_argument("--restore-backup", type=Path, help="Raw JSON recovery snapshot to restore")
     parser.add_argument("--restore-browser", choices=("Chrome", "Edge"))
+    parser.add_argument("--verify-manifest", type=Path, help="Manifest to use with --verify-backup")
     parser.add_argument("--log-file", type=Path, help="Privacy-safe operation log path")
     parser.add_argument("--verbose", action="store_true", help="Print and log additional count-only details")
     parser.add_argument("--write-task-script", type=Path, help="Write a PowerShell scheduled-task registration script")
@@ -1882,6 +2006,8 @@ def main(argv: list[str] | None = None) -> int:
             args.sync,
             args.check_automation,
             args.run_automation,
+            args.verify_backup,
+            args.verify_manifest,
         )
     )
     if args.gui or not has_cli_operation:
@@ -1921,6 +2047,21 @@ def main(argv: list[str] | None = None) -> int:
             }
             print(json.dumps(document, indent=2))
             return 1
+
+    if args.verify_manifest and not args.verify_backup:
+        print("Error: --verify-manifest requires --verify-backup.", file=sys.stderr)
+        return 1
+    if args.verify_backup:
+        if args.restore_backup or args.restore_browser or args.write_task_script:
+            print("Error: backup verification cannot be combined with restore or task-script operations.", file=sys.stderr)
+            return 1
+        try:
+            report = verify_json_backup(args.verify_backup, args.verify_manifest)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        print(report.render())
+        return 0
 
     try:
         if args.profile_map:
