@@ -6,6 +6,19 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ## [Unreleased]
 
+### Security
+
+- Rejected manifest entries containing traversal paths, invalid sizes, or malformed SHA-256 values.
+- Rejected profile mapping files whose root document does not contain a mapping list.
+- Disabled persisted checkout credentials and added a 20-minute timeout to the SHA-pinned Windows CI job.
+
+### Changed
+
+- Added manifest retention and path-validation regression coverage.
+- Documented that standalone executable artifacts are not Authenticode-signed.
+
+## [0.2.0] - 2026-08-07
+
 ### Added
 
 - Added `assessment.md` with the current release-readiness assessment, prioritized findings, and verification results.
@@ -23,6 +36,16 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - Added unique UUID generation for every imported bookmark, imported folder, and generated import wrapper.
 - Added merged-data validation that rejects duplicate GUID values.
 - Added tests for nested imported GUID regeneration, duplicate GUID rejection, and repeated synchronization stability.
+- Added a private vulnerability reporting policy and repository ignore rules for Chromium bookmark data and generated backups.
+- Enabled Dependabot alerts and security updates, private vulnerability reporting, Python CodeQL default setup, SHA-pinned Actions enforcement, and `main` force-push and deletion protection. Confirmed that secret scanning push protection remains enabled.
+- Added conservative and aggressive duplicate-matching modes with conservative behavior as the default.
+- Added `chrome-wins`, `edge-wins`, `preserve-both`, `merge-folders`, and `dated-folder` strategies.
+- Added GUI and CLI dry-run reports that do not create files or write browser data.
+- Added independent Chrome and Edge restore from JSON recovery snapshots.
+- Added private named profile mappings with multi-mapping CLI execution and a sanitized example.
+- Added validated SHA-256 manifests and privacy-safe count-only logs.
+- Added PowerShell Task Scheduler script generation with backup-only defaults and explicit synchronization opt-in.
+- Added PyInstaller standalone Windows build support and a SHA-pinned Windows CI build artifact.
 
 ### Changed
 
@@ -53,6 +76,17 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - Removed the redundant second merge operation from synchronization.
 - Replaced the deprecated license table with the SPDX `MIT` string and raised the setuptools build requirement to version 77.
 - Updated the operating guide and assessment with resolved GUID handling and 27-test verification status.
+- Changed backup pruning to order recognized tool-generated files by their filename timestamps instead of inherited modification times.
+- Limited backup pruning to regular JSON and HTML files that match the tool's generated naming format.
+- Added regression coverage for raw-backup timestamp ordering and unrelated-file protection, bringing the suite to 29 tests.
+- Updated the operating guide and assessment with privacy guidance, repository security settings, and corrected retention behavior.
+- Changed default URL comparison to preserve path, query, fragment, and trailing-slash distinctions.
+- Extended GUI controls with duplicate mode, merge strategy, preview, restore, and mapping management.
+- Extended CLI operation handling for preview, mappings, restore, logging, scheduling, and verbose reports.
+- Added manifest retention, private-data ignore rules, and sanitized template handling.
+- Bumped the project version to 0.2.0 and expanded the maintained test suite to 55 passing cases.
+- Updated generated tasks to use the packaged executable when running from the standalone build.
+- Changed the local build script to use a unique system temporary workspace and explicit native exit-code checks, avoiding OneDrive build-directory locks.
 
 ## [0.1.0] - 2026-08-07
 

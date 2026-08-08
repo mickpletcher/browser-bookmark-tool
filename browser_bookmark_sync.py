@@ -4,9 +4,11 @@ import argparse
 import copy
 import csv
 import datetime as dt
+import hashlib
 import html
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,14 +19,22 @@ import uuid
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any, Iterable
+from urllib.parse import urlsplit, urlunsplit
 
 
 APP_NAME = "Browser Bookmark Tool"
 ROOT_NAMES = ("bookmark_bar", "other", "synced")
 BROWSER_PROCESS_NAMES = ("chrome.exe", "msedge.exe")
 MAX_BACKUPS = 50
+DUPLICATE_MODES = ("conservative", "aggressive")
+MERGE_STRATEGIES = ("chrome-wins", "edge-wins", "preserve-both", "merge-folders", "dated-folder")
+BACKUP_NAME_PATTERN = re.compile(
+    r"^(?P<prefix>Chrome|Edge|Bookmarks|Manifest)_"
+    r"(?P<stamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:_\d{6})?)"
+    r"\.(?P<extension>json|html)$"
+)
 
 
 def local_app_data() -> Path:
@@ -112,6 +122,202 @@ def backup_retention(value: str) -> int:
     return keep
 
 
+@dataclass
+class ProfileMapping:
+    name: str
+    chrome_profile: Path
+    edge_profile: Path
+    backup_dir: Path
+
+
+def load_profile_mappings(path: Path) -> dict[str, ProfileMapping]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Could not read profile mappings from {path}.") from exc
+    if not isinstance(document, dict) or not isinstance(document.get("mappings"), list):
+        raise RuntimeError(f"Profile mappings in {path} must contain a mappings list.")
+    mappings: dict[str, ProfileMapping] = {}
+    for item in document["mappings"]:
+        try:
+            mapping = ProfileMapping(
+                name=str(item["name"]),
+                chrome_profile=Path(item["chrome_profile"]),
+                edge_profile=Path(item["edge_profile"]),
+                backup_dir=Path(item["backup_dir"]),
+            )
+        except (KeyError, TypeError) as exc:
+            raise RuntimeError(f"A profile mapping in {path} is incomplete.") from exc
+        if mapping.name in mappings:
+            raise RuntimeError(f"Duplicate profile mapping name: {mapping.name}")
+        mappings[mapping.name] = mapping
+    if not mappings:
+        raise RuntimeError(f"No profile mappings exist in {path}.")
+    return mappings
+
+
+def save_profile_mapping(path: Path, mapping: ProfileMapping) -> None:
+    existing: dict[str, ProfileMapping] = {}
+    if path.exists():
+        existing = load_profile_mappings(path)
+    existing[mapping.name] = mapping
+    document = {
+        "mappings": [
+            {
+                "name": item.name,
+                "chrome_profile": str(item.chrome_profile),
+                "edge_profile": str(item.edge_profile),
+                "backup_dir": str(item.backup_dir),
+            }
+            for item in sorted(existing.values(), key=lambda value: value.name.casefold())
+        ]
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_backup_manifest(
+    destination: Path,
+    files: Iterable[Path],
+    preview: SyncPreview | None = None,
+) -> Path:
+    entries = [
+        {"name": path.name, "sha256": sha256_file(path), "size": path.stat().st_size}
+        for path in files
+    ]
+    document: dict[str, Any] = {
+        "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "files": entries,
+    }
+    if preview is not None:
+        document["summary"] = {
+            "chrome_count": preview.chrome_count,
+            "edge_count": preview.edge_count,
+            "merged_count": preview.merged_count,
+            "duplicates_removed": preview.duplicates_removed,
+            "merge_strategy": preview.merge_strategy,
+            "duplicate_mode": preview.duplicate_mode,
+        }
+    destination.write_text(json.dumps(document, indent=2), encoding="utf-8")
+    validate_backup_manifest(destination)
+    return destination
+
+
+def validate_backup_manifest(path: Path) -> None:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Backup manifest {path} is invalid.") from exc
+    if not isinstance(document, dict) or not isinstance(document.get("files"), list):
+        raise RuntimeError(f"Backup manifest {path} does not contain a files list.")
+    for entry in document["files"]:
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"Backup manifest {path} contains an invalid file entry.")
+        name = entry.get("name")
+        size = entry.get("size")
+        checksum = entry.get("sha256")
+        if (
+            not isinstance(name, str)
+            or Path(name).name != name
+            or not isinstance(size, int)
+            or size < 0
+            or not isinstance(checksum, str)
+            or re.fullmatch(r"[0-9a-f]{64}", checksum) is None
+        ):
+            raise RuntimeError(f"Backup manifest {path} contains an invalid file entry.")
+        target = path.parent / name
+        if not target.is_file() or target.stat().st_size != size or sha256_file(target) != checksum:
+            raise RuntimeError(f"Backup integrity validation failed for {target}.")
+
+
+def write_privacy_safe_log(path: Path, event: str, **details: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    safe = " ".join(f"{key}={value}" for key, value in sorted(details.items()))
+    timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(f"{timestamp} event={event}{' ' if safe else ''}{safe}\n")
+
+
+def restore_json_backup(
+    backup_path: Path,
+    profile: Path,
+    browser: str,
+    recovery_dir: Path,
+    force: bool = False,
+) -> Path:
+    if backup_path.suffix.casefold() != ".json":
+        raise RuntimeError("Direct restore requires a raw JSON recovery snapshot. Import HTML backups through the browser.")
+    try:
+        data = json.loads(backup_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Could not read recovery snapshot {backup_path}.") from exc
+    if not isinstance(data, dict) or "roots" not in data:
+        raise RuntimeError(f"The recovery snapshot {backup_path} is not a Chromium bookmark file.")
+    process = {"Chrome": "chrome.exe", "Edge": "msedge.exe"}[browser]
+    if not force and process in running_browser_processes():
+        raise RuntimeError(f"Restore blocked because {process} is running.")
+    current = profile / "Bookmarks"
+    if not current.is_file():
+        raise RuntimeError(f"No current Bookmarks file exists in {profile}.")
+    stamp = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    recovery_dir.mkdir(parents=True, exist_ok=True)
+    preserved = recovery_dir / f"{browser}_PreRestore_{stamp}.json"
+    shutil.copy2(current, preserved)
+    staged = prepare_json_write(current, data)
+    try:
+        os.replace(staged, current)
+    finally:
+        staged.unlink(missing_ok=True)
+    return preserved
+
+
+def write_task_scheduler_script(
+    destination: Path,
+    chrome_profile: Path,
+    edge_profile: Path,
+    backup_dir: Path,
+    task_name: str,
+    task_time: str,
+    synchronize_task: bool = False,
+) -> Path:
+    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", task_time):
+        raise RuntimeError("Task time must use 24-hour HH:MM format.")
+    frozen = bool(getattr(sys, "frozen", False))
+    executable = sys.executable if frozen else "py"
+    arguments = ([] if frozen else ["-m", "browser_bookmark_sync"]) + [
+        "--chrome-profile",
+        str(chrome_profile),
+        "--edge-profile",
+        str(edge_profile),
+        "--backup-dir",
+        str(backup_dir),
+        "--keep",
+        str(MAX_BACKUPS),
+    ]
+    if synchronize_task:
+        arguments.append("--sync")
+    argument_text = subprocess.list2cmdline(arguments).replace("'", "''")
+    executable_text = executable.replace("'", "''")
+    task_name_text = task_name.replace("'", "''")
+    script = (
+        f"$action = New-ScheduledTaskAction -Execute '{executable_text}' -Argument '{argument_text}'\n"
+        f"$trigger = New-ScheduledTaskTrigger -Daily -At '{task_time}'\n"
+        f"Register-ScheduledTask -TaskName '{task_name_text}' -Action $action -Trigger $trigger "
+        f"-Description 'Browser bookmark backup{' and synchronization' if synchronize_task else ''}'\n"
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(script, encoding="utf-8")
+    return destination
+
+
 def read_bookmarks(profile: Path) -> dict[str, Any]:
     path = profile / "Bookmarks"
     try:
@@ -194,11 +400,33 @@ def iter_urls(node: dict[str, Any]) -> Iterable[dict[str, Any]]:
         yield from iter_urls(child)
 
 
-def normalized_url(url: str) -> str:
+def normalized_url(url: str, mode: str = "conservative") -> str:
+    if mode not in DUPLICATE_MODES:
+        raise RuntimeError(f"Duplicate mode must be one of: {', '.join(DUPLICATE_MODES)}")
     value = url.strip()
-    if value.endswith("/") and value.count("/") > 2:
-        value = value[:-1]
-    return value.casefold()
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return value.casefold() if mode == "aggressive" else value
+    netloc = parsed.netloc
+    if netloc:
+        userinfo, separator, host_port = netloc.rpartition("@")
+        prefix = f"{userinfo}@" if separator else ""
+        if host_port.startswith("[") and "]" in host_port:
+            end = host_port.index("]")
+            host_port = host_port[: end + 1].casefold() + host_port[end + 1 :]
+        elif host_port.count(":") == 1:
+            host, port = host_port.rsplit(":", 1)
+            host_port = f"{host.casefold()}:{port}"
+        else:
+            host_port = host_port.casefold()
+        netloc = prefix + host_port
+    normalized = urlunsplit((parsed.scheme.casefold(), netloc, parsed.path, parsed.query, parsed.fragment))
+    if mode == "aggressive":
+        if normalized.endswith("/") and normalized.count("/") > 2:
+            normalized = normalized[:-1]
+        normalized = normalized.casefold()
+    return normalized
 
 
 def max_numeric_id(data: dict[str, Any]) -> int:
@@ -235,7 +463,7 @@ def validate_unique_guids(data: dict[str, Any]) -> None:
         raise RuntimeError(f"The merged bookmark data contains duplicate GUID values: {values}")
 
 
-def deduplicate_bookmarks(data: dict[str, Any]) -> int:
+def deduplicate_bookmarks(data: dict[str, Any], mode: str = "conservative") -> int:
     known: set[str] = set()
     removed = 0
 
@@ -244,7 +472,7 @@ def deduplicate_bookmarks(data: dict[str, Any]) -> int:
         children = []
         for child in node.get("children", []):
             if child.get("type") == "url" and child.get("url"):
-                key = normalized_url(child["url"])
+                key = normalized_url(child["url"], mode)
                 if key in known:
                     removed += 1
                     continue
@@ -261,30 +489,44 @@ def deduplicate_bookmarks(data: dict[str, Any]) -> int:
     return removed
 
 
-def alphabetize_bookmarks(data: dict[str, Any]) -> None:
+def alphabetize_bookmarks(data: dict[str, Any]) -> int:
+    reordered = 0
+
     def sort_children(node: dict[str, Any]) -> None:
+        nonlocal reordered
         children = node.get("children", [])
         for child in children:
             if child.get("type") == "folder":
                 sort_children(child)
+        before = [str(child.get("guid") or child.get("id") or index) for index, child in enumerate(children)]
         children.sort(
             key=lambda child: (
                 child.get("type") != "folder",
                 str(child.get("name") or child.get("url") or "").casefold(),
             )
         )
+        after = [str(child.get("guid") or child.get("id") or index) for index, child in enumerate(children)]
+        if before != after:
+            reordered += 1
 
     for root_name in ROOT_NAMES:
         root = data.get("roots", {}).get(root_name)
         if root:
             sort_children(root)
+    return reordered
 
 
-def merge_bookmarks(primary: dict[str, Any], secondary: dict[str, Any]) -> tuple[dict[str, Any], int]:
+def merge_bookmarks(
+    primary: dict[str, Any],
+    secondary: dict[str, Any],
+    duplicate_mode: str = "conservative",
+    wrapper_name: str = "Imported from other browser",
+    merge_matching_folders: bool = False,
+) -> tuple[dict[str, Any], int]:
     """Return a conservative union, retaining primary folders and appending unique URLs."""
     merged = copy.deepcopy(primary)
     roots = merged.setdefault("roots", {})
-    known = {normalized_url(n["url"]) for root in roots.values() for n in iter_urls(root)}
+    known = {normalized_url(n["url"], duplicate_mode) for root in roots.values() for n in iter_urls(root)}
     known_guids = {
         str(node["guid"]).casefold()
         for root in roots.values()
@@ -305,7 +547,7 @@ def merge_bookmarks(primary: dict[str, Any], secondary: dict[str, Any]) -> tuple
         nonlocal next_id, added
         if node.get("type") == "url":
             url = node.get("url", "")
-            key = normalized_url(url)
+            key = normalized_url(url, duplicate_mode)
             if not url or key in known:
                 return None
             known.add(key)
@@ -327,17 +569,45 @@ def merge_bookmarks(primary: dict[str, Any], secondary: dict[str, Any]) -> tuple
             return result
         return None
 
-    destination = roots.get("other") or roots.get("bookmark_bar")
-    if destination is None:
-        raise RuntimeError("The primary browser file has no recognized bookmark roots.")
     imported_children: list[dict[str, Any]] = []
-    for root_name in ROOT_NAMES:
-        source_root = secondary.get("roots", {}).get(root_name)
-        if source_root:
-            for child in source_root.get("children", []):
-                cloned = clone_unique(child)
-                if cloned is not None:
-                    imported_children.append(cloned)
+
+    def merge_children(destination: dict[str, Any], source_children: list[dict[str, Any]]) -> None:
+        destination_children = destination.setdefault("children", [])
+        for child in source_children:
+            if child.get("type") == "folder":
+                matching = next(
+                    (
+                        item
+                        for item in destination_children
+                        if item.get("type") == "folder"
+                        and str(item.get("name", "")).casefold() == str(child.get("name", "")).casefold()
+                    ),
+                    None,
+                )
+                if matching is not None:
+                    merge_children(matching, child.get("children", []))
+                    continue
+            cloned = clone_unique(child)
+            if cloned is not None:
+                destination_children.append(cloned)
+
+    if merge_matching_folders:
+        for root_name in ROOT_NAMES:
+            source_root = secondary.get("roots", {}).get(root_name)
+            destination_root = roots.get(root_name)
+            if source_root and destination_root:
+                merge_children(destination_root, source_root.get("children", []))
+    else:
+        destination = roots.get("other") or roots.get("bookmark_bar")
+        if destination is None:
+            raise RuntimeError("The primary browser file has no recognized bookmark roots.")
+        for root_name in ROOT_NAMES:
+            source_root = secondary.get("roots", {}).get(root_name)
+            if source_root:
+                for child in source_root.get("children", []):
+                    cloned = clone_unique(child)
+                    if cloned is not None:
+                        imported_children.append(cloned)
     if imported_children:
         folder = {
             "children": imported_children,
@@ -345,7 +615,7 @@ def merge_bookmarks(primary: dict[str, Any], secondary: dict[str, Any]) -> tuple
             "date_modified": "0",
             "guid": new_guid(),
             "id": str(next_id),
-            "name": "Imported from other browser",
+            "name": wrapper_name,
             "type": "folder",
         }
         destination.setdefault("children", []).append(folder)
@@ -390,14 +660,135 @@ def export_html(data: dict[str, Any], destination: Path) -> int:
 
 
 def prune_backups(directory: Path, keep: int) -> None:
-    groups: dict[str, list[Path]] = {"Chrome": [], "Edge": [], "Bookmarks": []}
+    groups: dict[str, list[tuple[str, Path]]] = {"Chrome": [], "Edge": [], "Bookmarks": [], "Manifest": []}
     for path in directory.glob("*"):
-        for prefix in groups:
-            if path.name.startswith(prefix + "_"):
-                groups[prefix].append(path)
-    for paths in groups.values():
-        for old in sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)[keep:]:
+        if not path.is_file() or not (match := BACKUP_NAME_PATTERN.fullmatch(path.name)):
+            continue
+        prefix = match.group("prefix")
+        extension = match.group("extension")
+        if prefix == "Bookmarks" and extension != "html":
+            continue
+        if prefix != "Bookmarks" and extension != "json":
+            continue
+        groups[prefix].append((match.group("stamp"), path))
+    for backups in groups.values():
+        for _, old in sorted(backups, key=lambda item: item[0], reverse=True)[keep:]:
             old.unlink()
+
+
+@dataclass
+class SyncPreview:
+    chrome_count: int
+    edge_count: int
+    chrome_only: int
+    edge_only: int
+    input_duplicates: int
+    duplicates_removed: int
+    merged_count: int
+    folders_added: int
+    folders_reordered: int
+    merge_strategy: str
+    duplicate_mode: str
+
+    def render(self) -> str:
+        return (
+            f"Strategy: {self.merge_strategy}\n"
+            f"Duplicate matching: {self.duplicate_mode}\n"
+            f"Chrome bookmarks: {self.chrome_count}\n"
+            f"Edge favorites: {self.edge_count}\n"
+            f"Chrome-only URLs: {self.chrome_only}\n"
+            f"Edge-only URLs: {self.edge_only}\n"
+            f"Duplicates already in inputs: {self.input_duplicates}\n"
+            f"Duplicates removed: {self.duplicates_removed}\n"
+            f"Folders added: {self.folders_added}\n"
+            f"Folders reordered: {self.folders_reordered}\n"
+            f"Final bookmark count: {self.merged_count}"
+        )
+
+
+def count_bookmarks(data: dict[str, Any]) -> int:
+    return sum(1 for root in data.get("roots", {}).values() for _ in iter_urls(root))
+
+
+def count_folders(data: dict[str, Any]) -> int:
+    return sum(
+        1
+        for root in data.get("roots", {}).values()
+        for node in walk_nodes(root)
+        if node.get("type") == "folder"
+    )
+
+
+def prepare_merged_data(
+    chrome: dict[str, Any],
+    edge: dict[str, Any],
+    deduplicate: bool = False,
+    alphabetize: bool = False,
+    duplicate_mode: str = "conservative",
+    merge_strategy: str = "chrome-wins",
+) -> tuple[dict[str, Any], SyncPreview]:
+    if merge_strategy not in MERGE_STRATEGIES:
+        raise RuntimeError(f"Merge strategy must be one of: {', '.join(MERGE_STRATEGIES)}")
+    chrome_urls = [normalized_url(node["url"], duplicate_mode) for root in chrome.get("roots", {}).values() for node in iter_urls(root)]
+    edge_urls = [normalized_url(node["url"], duplicate_mode) for root in edge.get("roots", {}).values() for node in iter_urls(root)]
+    chrome_keys = set(chrome_urls)
+    edge_keys = set(edge_urls)
+
+    if merge_strategy == "edge-wins":
+        primary, secondary = edge, chrome
+        wrapper_name = "Imported from Chrome"
+        merge_folders = False
+    else:
+        primary, secondary = chrome, edge
+        wrapper_name = {
+            "preserve-both": "Edge favorites",
+            "dated-folder": f"Imported from Edge {dt.datetime.now().strftime('%Y-%m-%d')}",
+        }.get(merge_strategy, "Imported from other browser")
+        merge_folders = merge_strategy == "merge-folders"
+
+    primary_folder_count = count_folders(primary)
+    merged, _ = merge_bookmarks(
+        primary,
+        secondary,
+        duplicate_mode=duplicate_mode,
+        wrapper_name=wrapper_name,
+        merge_matching_folders=merge_folders,
+    )
+    duplicates_removed = deduplicate_bookmarks(merged, duplicate_mode) if deduplicate else 0
+    folders_reordered = alphabetize_bookmarks(merged) if alphabetize else 0
+    preview = SyncPreview(
+        chrome_count=len(chrome_urls),
+        edge_count=len(edge_urls),
+        chrome_only=len(chrome_keys - edge_keys),
+        edge_only=len(edge_keys - chrome_keys),
+        input_duplicates=(len(chrome_urls) - len(chrome_keys)) + (len(edge_urls) - len(edge_keys)),
+        duplicates_removed=duplicates_removed,
+        merged_count=count_bookmarks(merged),
+        folders_added=max(0, count_folders(merged) - primary_folder_count),
+        folders_reordered=folders_reordered,
+        merge_strategy=merge_strategy,
+        duplicate_mode=duplicate_mode,
+    )
+    return merged, preview
+
+
+def preview_synchronization(
+    chrome_profile: Path,
+    edge_profile: Path,
+    deduplicate: bool = False,
+    alphabetize: bool = False,
+    duplicate_mode: str = "conservative",
+    merge_strategy: str = "chrome-wins",
+) -> SyncPreview:
+    _, preview = prepare_merged_data(
+        read_bookmarks(chrome_profile),
+        read_bookmarks(edge_profile),
+        deduplicate=deduplicate,
+        alphabetize=alphabetize,
+        duplicate_mode=duplicate_mode,
+        merge_strategy=merge_strategy,
+    )
+    return preview
 
 
 @dataclass
@@ -408,7 +799,10 @@ class SyncResult:
     duplicates_removed: int
     alphabetized: bool
     closed_processes: tuple[str, ...]
+    preview: SyncPreview
     html_path: Path
+    manifest_path: Path
+    log_path: Path
     backup_dir: Path
 
 
@@ -422,6 +816,10 @@ def synchronize(
     alphabetize: bool = False,
     force: bool = False,
     close_browsers: bool = False,
+    duplicate_mode: str = "conservative",
+    merge_strategy: str = "chrome-wins",
+    log_file: Path | None = None,
+    verbose: bool = False,
 ) -> SyncResult:
     if not 1 <= keep <= MAX_BACKUPS:
         raise RuntimeError(f"Backup retention must be from 1 to {MAX_BACKUPS}.")
@@ -431,15 +829,35 @@ def synchronize(
     edge = read_bookmarks(edge_profile)
     stamp = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
     backup_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(chrome_profile / "Bookmarks", backup_dir / f"Chrome_{stamp}.json")
-    shutil.copy2(edge_profile / "Bookmarks", backup_dir / f"Edge_{stamp}.json")
+    chrome_backup = backup_dir / f"Chrome_{stamp}.json"
+    edge_backup = backup_dir / f"Edge_{stamp}.json"
+    shutil.copy2(chrome_profile / "Bookmarks", chrome_backup)
+    shutil.copy2(edge_profile / "Bookmarks", edge_backup)
 
-    merged, _ = merge_bookmarks(chrome, edge)
-    duplicates_removed = deduplicate_bookmarks(merged) if deduplicate else 0
-    if alphabetize:
-        alphabetize_bookmarks(merged)
+    merged, preview = prepare_merged_data(
+        chrome,
+        edge,
+        deduplicate=deduplicate,
+        alphabetize=alphabetize,
+        duplicate_mode=duplicate_mode,
+        merge_strategy=merge_strategy,
+    )
     html_path = backup_dir / f"Bookmarks_{stamp}.html"
     merged_count = export_html(merged, html_path)
+    manifest_path = write_backup_manifest(
+        backup_dir / f"Manifest_{stamp}.json",
+        [chrome_backup, edge_backup, html_path],
+        preview,
+    )
+    log_path = log_file or backup_dir / "browser-bookmark-tool.log"
+    write_privacy_safe_log(
+        log_path,
+        "backup_export_complete",
+        chrome_count=preview.chrome_count,
+        edge_count=preview.edge_count,
+        merged_count=preview.merged_count,
+        manifest=manifest_path.name,
+    )
     prune_backups(backup_dir, keep)
     closed_processes: tuple[str, ...] = ()
     if write:
@@ -467,20 +885,33 @@ def synchronize(
                     )
             elif running:
                 names = ", ".join(running)
+                write_privacy_safe_log(log_path, "sync_blocked", processes=names)
                 raise RuntimeError(
                     f"Synchronization blocked because these browser processes are running: {names}. "
                     f"Close them completely and try again. Backups and the HTML export were created in "
                     f"{backup_dir}. HTML: {html_path}"
                 )
         transactional_json_write(chrome_profile / "Bookmarks", edge_profile / "Bookmarks", merged)
+        write_privacy_safe_log(
+            log_path,
+            "sync_complete",
+            closed_processes=",".join(closed_processes) or "none",
+            duplicates_removed=preview.duplicates_removed,
+            strategy=merge_strategy,
+        )
+    elif verbose:
+        write_privacy_safe_log(log_path, "verbose_summary", folders_added=preview.folders_added, folders_reordered=preview.folders_reordered)
     return SyncResult(
-        chrome_count=sum(1 for root in chrome.get("roots", {}).values() for _ in iter_urls(root)),
-        edge_count=sum(1 for root in edge.get("roots", {}).values() for _ in iter_urls(root)),
+        chrome_count=preview.chrome_count,
+        edge_count=preview.edge_count,
         merged_count=merged_count,
-        duplicates_removed=duplicates_removed,
+        duplicates_removed=preview.duplicates_removed,
         alphabetized=alphabetize,
         closed_processes=closed_processes,
+        preview=preview,
         html_path=html_path,
+        manifest_path=manifest_path,
+        log_path=log_path,
         backup_dir=backup_dir,
     )
 
@@ -490,13 +921,15 @@ class App(ttk.Frame):
         super().__init__(master, padding=18)
         self.master = master
         master.title(APP_NAME)
-        master.minsize(680, 470)
+        master.minsize(760, 620)
         self.chrome = tk.StringVar()
         self.edge = tk.StringVar()
         self.backups = tk.StringVar(value=str(default_backup_dir()))
         self.keep = tk.IntVar(value=MAX_BACKUPS)
         self.deduplicate = tk.BooleanVar(value=False)
         self.alphabetize = tk.BooleanVar(value=False)
+        self.duplicate_mode = tk.StringVar(value="conservative")
+        self.merge_strategy = tk.StringVar(value="chrome-wins")
         self.status = tk.StringVar(value="Select a Chrome and Edge profile.")
         self._build()
         self._detect()
@@ -516,15 +949,38 @@ class App(ttk.Frame):
         options.grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 0))
         ttk.Checkbutton(options, text="Remove duplicate bookmarks", variable=self.deduplicate).pack(side="left")
         ttk.Checkbutton(options, text="Alphabetize bookmarks", variable=self.alphabetize).pack(side="left", padx=16)
+        ttk.Label(self, text="Duplicate matching").grid(row=7, column=0, sticky="w", pady=8)
+        ttk.Combobox(
+            self,
+            textvariable=self.duplicate_mode,
+            values=DUPLICATE_MODES,
+            state="readonly",
+            width=20,
+        ).grid(row=7, column=1, sticky="w", padx=10)
+        ttk.Label(self, text="Merge strategy").grid(row=8, column=0, sticky="w", pady=8)
+        ttk.Combobox(
+            self,
+            textvariable=self.merge_strategy,
+            values=MERGE_STRATEGIES,
+            state="readonly",
+            width=24,
+        ).grid(row=8, column=1, sticky="w", padx=10)
         note = "Close Chrome and Edge before syncing. A raw backup of each browser is created before any changes are written."
-        ttk.Label(self, text=note, wraplength=620, foreground="#8a4b08").grid(row=7, column=0, columnspan=3, sticky="w", pady=(18, 12))
+        ttk.Label(self, text=note, wraplength=700, foreground="#8a4b08").grid(row=9, column=0, columnspan=3, sticky="w", pady=(18, 12))
         buttons = ttk.Frame(self)
-        buttons.grid(row=8, column=0, columnspan=3, sticky="ew")
+        buttons.grid(row=10, column=0, columnspan=3, sticky="ew")
+        ttk.Button(buttons, text="Preview Changes", command=self._preview).pack(side="left")
         ttk.Button(buttons, text="Back Up + Export HTML", command=lambda: self._run(False)).pack(side="left")
         ttk.Button(buttons, text="Back Up + Sync", command=lambda: self._run(True)).pack(side="left", padx=8)
         ttk.Button(buttons, text="Open Backup Folder", command=self._open_backups).pack(side="left")
-        ttk.Separator(self).grid(row=9, column=0, columnspan=3, sticky="ew", pady=18)
-        ttk.Label(self, textvariable=self.status, wraplength=630).grid(row=10, column=0, columnspan=3, sticky="w")
+        management = ttk.Frame(self)
+        management.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        ttk.Button(management, text="Restore Chrome", command=lambda: self._restore("Chrome")).pack(side="left")
+        ttk.Button(management, text="Restore Edge", command=lambda: self._restore("Edge")).pack(side="left", padx=8)
+        ttk.Button(management, text="Save Profile Mapping", command=self._save_mapping).pack(side="left")
+        ttk.Button(management, text="Load Profile Mapping", command=self._load_mapping).pack(side="left", padx=8)
+        ttk.Separator(self).grid(row=12, column=0, columnspan=3, sticky="ew", pady=18)
+        ttk.Label(self, textvariable=self.status, wraplength=700).grid(row=13, column=0, columnspan=3, sticky="w")
         self.pack(fill="both", expand=True)
 
     def _profile_row(self, row: int, label: str, variable: tk.StringVar) -> ttk.Combobox:
@@ -567,6 +1023,8 @@ class App(ttk.Frame):
                 write=write,
                 deduplicate=self.deduplicate.get(),
                 alphabetize=self.alphabetize.get(),
+                duplicate_mode=self.duplicate_mode.get(),
+                merge_strategy=self.merge_strategy.get(),
             )
             action = "Synchronized" if write else "Exported"
             details = [f"{action} {result.merged_count} bookmarks."]
@@ -580,18 +1038,107 @@ class App(ttk.Frame):
         except Exception as exc:
             messagebox.showerror(APP_NAME, str(exc))
 
+    def _preview(self) -> None:
+        if not self.chrome.get() or not self.edge.get():
+            messagebox.showerror(APP_NAME, "Chrome and Edge profiles are required.")
+            return
+        try:
+            preview = preview_synchronization(
+                Path(self.chrome.get()),
+                Path(self.edge.get()),
+                deduplicate=self.deduplicate.get(),
+                alphabetize=self.alphabetize.get(),
+                duplicate_mode=self.duplicate_mode.get(),
+                merge_strategy=self.merge_strategy.get(),
+            )
+            messagebox.showinfo(f"{APP_NAME} Preview", preview.render())
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, str(exc))
+
     def _open_backups(self) -> None:
         directory = Path(self.backups.get())
         directory.mkdir(parents=True, exist_ok=True)
         webbrowser.open(directory.as_uri())
 
+    def _restore(self, browser: str) -> None:
+        profile_value = self.chrome.get() if browser == "Chrome" else self.edge.get()
+        if not profile_value:
+            messagebox.showerror(APP_NAME, f"A {browser} profile is required.")
+            return
+        selected = filedialog.askopenfilename(
+            initialdir=self.backups.get(),
+            title=f"Select {browser} JSON recovery snapshot",
+            filetypes=[("JSON recovery snapshots", "*.json")],
+        )
+        if not selected:
+            return
+        if not messagebox.askyesno(APP_NAME, f"Restore {browser} from {selected}?\n\nThe current file will be preserved first."):
+            return
+        try:
+            preserved = restore_json_backup(
+                Path(selected),
+                Path(profile_value),
+                browser,
+                Path(self.backups.get()),
+            )
+            messagebox.showinfo(APP_NAME, f"{browser} was restored. Previous file: {preserved}")
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, str(exc))
+
+    def _save_mapping(self) -> None:
+        if not self.chrome.get() or not self.edge.get():
+            messagebox.showerror(APP_NAME, "Chrome and Edge profiles are required.")
+            return
+        name = simpledialog.askstring(APP_NAME, "Mapping name:")
+        if not name:
+            return
+        destination = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            initialfile="profile-mappings.json",
+            filetypes=[("JSON mapping files", "*.json")],
+        )
+        if not destination:
+            return
+        try:
+            save_profile_mapping(
+                Path(destination),
+                ProfileMapping(name, Path(self.chrome.get()), Path(self.edge.get()), Path(self.backups.get())),
+            )
+            messagebox.showinfo(APP_NAME, f"Saved profile mapping: {name}")
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, str(exc))
+
+    def _load_mapping(self) -> None:
+        selected = filedialog.askopenfilename(filetypes=[("JSON mapping files", "*.json")])
+        if not selected:
+            return
+        try:
+            mappings = load_profile_mappings(Path(selected))
+            names = sorted(mappings)
+            name = names[0] if len(names) == 1 else simpledialog.askstring(APP_NAME, f"Mapping name ({', '.join(names)}):")
+            if not name:
+                return
+            mapping = mappings.get(name)
+            if mapping is None:
+                raise RuntimeError(f"No mapping named {name} exists in {selected}.")
+            self.chrome.set(str(mapping.chrome_profile))
+            self.edge.set(str(mapping.edge_profile))
+            self.backups.set(str(mapping.backup_dir))
+            self.status.set(f"Loaded profile mapping: {mapping.name}")
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, str(exc))
+
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=APP_NAME)
-    parser.add_argument("--sync", action="store_true", help="Synchronize instead of backup/export only")
+    operation_options = parser.add_mutually_exclusive_group()
+    operation_options.add_argument("--sync", action="store_true", help="Synchronize instead of backup/export only")
+    operation_options.add_argument("--dry-run", action="store_true", help="Preview changes without backups, exports, or writes")
     parser.add_argument("--chrome-profile", type=Path)
     parser.add_argument("--edge-profile", type=Path)
     parser.add_argument("--backup-dir", type=Path, default=default_backup_dir())
+    parser.add_argument("--profile-map", type=Path, help="Private JSON file containing named profile mappings")
+    parser.add_argument("--mapping", action="append", help="Named mapping to run; repeat for multiple mappings")
     parser.add_argument(
         "--keep",
         type=backup_retention,
@@ -600,6 +1147,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--deduplicate", action="store_true", help="Remove duplicate URLs from the merged collection")
     parser.add_argument("--alphabetize", action="store_true", help="Sort folders and bookmarks alphabetically")
+    parser.add_argument("--duplicate-mode", choices=DUPLICATE_MODES, default="conservative")
+    parser.add_argument("--merge-strategy", choices=MERGE_STRATEGIES, default="chrome-wins")
+    parser.add_argument("--restore-backup", type=Path, help="Raw JSON recovery snapshot to restore")
+    parser.add_argument("--restore-browser", choices=("Chrome", "Edge"))
+    parser.add_argument("--log-file", type=Path, help="Privacy-safe operation log path")
+    parser.add_argument("--verbose", action="store_true", help="Print and log additional count-only details")
+    parser.add_argument("--write-task-script", type=Path, help="Write a PowerShell scheduled-task registration script")
+    parser.add_argument("--task-name", default=APP_NAME)
+    parser.add_argument("--task-time", default="02:00")
+    parser.add_argument("--task-sync", action="store_true", help="Opt in to synchronization in the generated task")
     process_options = parser.add_mutually_exclusive_group()
     process_options.add_argument("--force", action="store_true", help="Synchronize without checking for running browser processes")
     process_options.add_argument(
@@ -613,36 +1170,128 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    if args.gui or (not args.chrome_profile and not args.edge_profile):
+    has_cli_operation = any(
+        (
+            args.chrome_profile,
+            args.edge_profile,
+            args.profile_map,
+            args.restore_backup,
+            args.write_task_script,
+            args.dry_run,
+            args.sync,
+        )
+    )
+    if args.gui or not has_cli_operation:
         root = tk.Tk()
         App(root)
         root.mainloop()
         return 0
-    if not args.chrome_profile or not args.edge_profile:
-        raise SystemExit("Both --chrome-profile and --edge-profile are required.")
+
     try:
-        result = synchronize(
-            args.chrome_profile,
-            args.edge_profile,
-            args.backup_dir,
-            keep=args.keep,
-            write=args.sync,
-            deduplicate=args.deduplicate,
-            alphabetize=args.alphabetize,
-            force=args.force,
-            close_browsers=args.close_browsers,
-        )
+        if args.profile_map:
+            available = load_profile_mappings(args.profile_map)
+            names = args.mapping or sorted(available)
+            missing = [name for name in names if name not in available]
+            if missing:
+                raise RuntimeError(f"Unknown profile mapping(s): {', '.join(missing)}")
+            mappings = [available[name] for name in names]
+        else:
+            if not args.chrome_profile or not args.edge_profile:
+                raise RuntimeError("Both --chrome-profile and --edge-profile are required.")
+            mappings = [ProfileMapping("direct", args.chrome_profile, args.edge_profile, args.backup_dir)]
     except RuntimeError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
-    print(
-        f"Bookmarks: {result.merged_count}\n"
-        f"Duplicates removed: {result.duplicates_removed}\n"
-        f"Alphabetized: {'Yes' if result.alphabetized else 'No'}\n"
-        f"Browsers closed: {', '.join(result.closed_processes) if result.closed_processes else 'No'}\n"
-        f"HTML: {result.html_path}\n"
-        f"Backups: {result.backup_dir}"
-    )
+
+    if (args.restore_backup or args.write_task_script) and len(mappings) != 1:
+        print("Error: restore and task-script operations require exactly one profile mapping.", file=sys.stderr)
+        return 1
+
+    if args.restore_backup:
+        if not args.restore_browser:
+            print("Error: --restore-browser is required with --restore-backup.", file=sys.stderr)
+            return 1
+        mapping = mappings[0]
+        profile = mapping.chrome_profile if args.restore_browser == "Chrome" else mapping.edge_profile
+        try:
+            preserved = restore_json_backup(
+                args.restore_backup,
+                profile,
+                args.restore_browser,
+                mapping.backup_dir,
+                force=args.force,
+            )
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        print(f"Restored {args.restore_browser}. Previous file: {preserved}")
+        return 0
+
+    if args.write_task_script:
+        mapping = mappings[0]
+        path = write_task_scheduler_script(
+            args.write_task_script,
+            mapping.chrome_profile,
+            mapping.edge_profile,
+            mapping.backup_dir,
+            args.task_name,
+            args.task_time,
+            synchronize_task=args.task_sync,
+        )
+        print(f"Task Scheduler script: {path}")
+        return 0
+
+    for index, mapping in enumerate(mappings):
+        if len(mappings) > 1:
+            print(f"[{mapping.name}]")
+        if args.dry_run:
+            try:
+                preview = preview_synchronization(
+                    mapping.chrome_profile,
+                    mapping.edge_profile,
+                    deduplicate=args.deduplicate,
+                    alphabetize=args.alphabetize,
+                    duplicate_mode=args.duplicate_mode,
+                    merge_strategy=args.merge_strategy,
+                )
+            except RuntimeError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+            print(preview.render())
+        else:
+            try:
+                result = synchronize(
+                    mapping.chrome_profile,
+                    mapping.edge_profile,
+                    mapping.backup_dir,
+                    keep=args.keep,
+                    write=args.sync,
+                    deduplicate=args.deduplicate,
+                    alphabetize=args.alphabetize,
+                    force=args.force,
+                    close_browsers=args.close_browsers,
+                    duplicate_mode=args.duplicate_mode,
+                    merge_strategy=args.merge_strategy,
+                    log_file=args.log_file,
+                    verbose=args.verbose,
+                )
+            except RuntimeError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+            print(
+                f"Bookmarks: {result.merged_count}\n"
+                f"Duplicates removed: {result.duplicates_removed}\n"
+                f"Alphabetized: {'Yes' if result.alphabetized else 'No'}\n"
+                f"Browsers closed: {', '.join(result.closed_processes) if result.closed_processes else 'No'}\n"
+                f"HTML: {result.html_path}\n"
+                f"Manifest: {result.manifest_path}\n"
+                f"Log: {result.log_path}\n"
+                f"Backups: {result.backup_dir}"
+            )
+            if args.verbose:
+                print(result.preview.render())
+        if index < len(mappings) - 1:
+            print()
     return 0
 
 

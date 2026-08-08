@@ -14,12 +14,20 @@ from browser_bookmark_sync import (
     export_html,
     iter_urls,
     main,
+    load_profile_mappings,
     merge_bookmarks,
+    normalized_url,
     parse_args,
+    prepare_merged_data,
     prune_backups,
+    ProfileMapping,
+    restore_json_backup,
     running_browser_processes,
     synchronize,
     validate_unique_guids,
+    validate_backup_manifest,
+    write_task_scheduler_script,
+    save_profile_mapping,
 )
 
 
@@ -34,7 +42,11 @@ def no_running_browsers(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_merge_deduplicates_and_retains_unique_links():
-    merged, added = merge_bookmarks(data("https://a.test/", "https://b.test"), data("https://a.test", "https://c.test"))
+    merged, added = merge_bookmarks(
+        data("https://a.test/", "https://b.test"),
+        data("https://a.test", "https://c.test"),
+        duplicate_mode="aggressive",
+    )
     urls = [node["url"] for root in merged["roots"].values() for node in iter_urls(root)]
     assert added == 1
     assert urls.count("https://c.test") == 1
@@ -113,7 +125,7 @@ def test_deduplicate_bookmarks_removes_normalized_urls_across_folders():
         }
     ]
 
-    removed = deduplicate_bookmarks(bookmarks)
+    removed = deduplicate_bookmarks(bookmarks, mode="aggressive")
     urls = [node["url"] for root in bookmarks["roots"].values() for node in iter_urls(root)]
 
     assert removed == 1
@@ -154,6 +166,21 @@ def test_organization_options_are_disabled_by_default():
     assert not args.close_browsers
 
 
+def test_conservative_url_matching_preserves_potentially_distinct_urls():
+    assert normalized_url(" HTTPS://Example.Test/Path?Value=One ") == "https://example.test/Path?Value=One"
+    assert normalized_url("https://example.test/Path") != normalized_url("https://example.test/path")
+    assert normalized_url("https://example.test/") != normalized_url("https://example.test")
+    assert normalized_url("https://example.test/Path/", mode="aggressive") == normalized_url(
+        "https://example.test/path",
+        mode="aggressive",
+    )
+
+
+def test_sync_and_dry_run_are_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        parse_args(["--sync", "--dry-run"])
+
+
 def test_backup_retention_rejects_values_above_50():
     with pytest.raises(SystemExit):
         parse_args(["--keep", "51"])
@@ -161,7 +188,7 @@ def test_backup_retention_rejects_values_above_50():
 
 def test_backup_retention_keeps_at_most_50_html_backups(tmp_path: Path):
     for index in range(51):
-        path = tmp_path / f"Bookmarks_{index:02}.html"
+        path = tmp_path / f"Bookmarks_2026-08-07_12-00-00_{index:06}.html"
         path.write_text(str(index))
         os.utime(path, (index + 1, index + 1))
 
@@ -169,7 +196,50 @@ def test_backup_retention_keeps_at_most_50_html_backups(tmp_path: Path):
 
     backups = sorted(tmp_path.glob("Bookmarks_*.html"))
     assert len(backups) == 50
-    assert not (tmp_path / "Bookmarks_00.html").exists()
+    assert not (tmp_path / "Bookmarks_2026-08-07_12-00-00_000000.html").exists()
+
+
+def test_backup_retention_uses_filename_timestamp_instead_of_file_mtime(tmp_path: Path):
+    older = tmp_path / "Chrome_2026-08-07_12-00-00_000001.json"
+    newer = tmp_path / "Chrome_2026-08-07_12-00-00_000002.json"
+    older.write_text("older")
+    newer.write_text("newer")
+    os.utime(older, (200, 200))
+    os.utime(newer, (100, 100))
+
+    prune_backups(tmp_path, 1)
+
+    assert not older.exists()
+    assert newer.exists()
+
+
+def test_backup_retention_ignores_unrecognized_files_and_directories(tmp_path: Path):
+    unrelated = [
+        tmp_path / "Chrome_notes.json",
+        tmp_path / "Edge_backup.json",
+        tmp_path / "Bookmarks_readme.html",
+    ]
+    for path in unrelated:
+        path.write_text("keep")
+    directory = tmp_path / "Chrome_2026-08-07_12-00-00_000001.json"
+    directory.mkdir()
+
+    prune_backups(tmp_path, 1)
+
+    assert all(path.exists() for path in unrelated)
+    assert directory.is_dir()
+
+
+def test_backup_retention_prunes_old_manifests(tmp_path: Path):
+    older = tmp_path / "Manifest_2026-08-07_12-00-00_000001.json"
+    newer = tmp_path / "Manifest_2026-08-07_12-00-00_000002.json"
+    older.write_text("{}")
+    newer.write_text("{}")
+
+    prune_backups(tmp_path, 1)
+
+    assert not older.exists()
+    assert newer.exists()
 
 
 def test_force_and_close_browsers_are_mutually_exclusive():
@@ -188,7 +258,9 @@ def test_synchronize_backs_up_and_writes_both(tmp_path: Path):
     result = synchronize(chrome, edge, tmp_path / "backups", keep=10, write=True)
     assert result.merged_count == 2
     assert json.loads((chrome / "Bookmarks").read_text()) == json.loads((edge / "Bookmarks").read_text())
-    assert len(list((tmp_path / "backups").glob("*.json"))) == 2
+    assert len(list((tmp_path / "backups").glob("Chrome_*.json"))) == 1
+    assert len(list((tmp_path / "backups").glob("Edge_*.json"))) == 1
+    assert result.manifest_path.exists()
     assert result.html_path.exists()
 
 
@@ -209,6 +281,7 @@ def test_synchronize_applies_optional_deduplication_and_alphabetizing(tmp_path: 
         write=True,
         deduplicate=True,
         alphabetize=True,
+        duplicate_mode="aggressive",
     )
     written = json.loads((chrome / "Bookmarks").read_text())
     bookmark_bar = written["roots"]["bookmark_bar"]["children"]
@@ -362,7 +435,9 @@ def test_synchronize_blocks_running_browsers_after_export(
     assert all(process in str(error.value) for process in processes)
     assert chrome_path.read_text() == chrome_original
     assert edge_path.read_text() == edge_original
-    assert len(list(backup_dir.glob("*.json"))) == 2
+    assert len(list(backup_dir.glob("Chrome_*.json"))) == 1
+    assert len(list(backup_dir.glob("Edge_*.json"))) == 1
+    assert len(list(backup_dir.glob("Manifest_*.json"))) == 1
     assert len(list(backup_dir.glob("*.html"))) == 1
 
 
@@ -404,7 +479,9 @@ def test_rapid_exports_create_distinct_html_backups(tmp_path: Path):
 
     assert first.html_path != second.html_path
     assert len(list(backup_dir.glob("Bookmarks_*.html"))) == 2
-    assert len(list(backup_dir.glob("*.json"))) == 4
+    assert len(list(backup_dir.glob("Chrome_*.json"))) == 2
+    assert len(list(backup_dir.glob("Edge_*.json"))) == 2
+    assert len(list(backup_dir.glob("Manifest_*.json"))) == 2
 
 
 def test_force_synchronizes_without_process_detection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -425,6 +502,83 @@ def test_force_synchronizes_without_process_detection(tmp_path: Path, monkeypatc
     synchronize(chrome, edge, tmp_path / "backups", write=True, force=True)
 
     assert json.loads(chrome_path.read_text()) == json.loads(edge_path.read_text())
+
+
+def test_edge_wins_uses_edge_as_primary_structure():
+    chrome = data("https://chrome.test")
+    edge = data("https://edge.test")
+
+    merged, preview = prepare_merged_data(chrome, edge, merge_strategy="edge-wins")
+    bookmark_bar_urls = [node["url"] for node in iter_urls(merged["roots"]["bookmark_bar"])]
+    imported_urls = [node["url"] for node in iter_urls(merged["roots"]["other"])]
+
+    assert bookmark_bar_urls == ["https://edge.test"]
+    assert imported_urls == ["https://chrome.test"]
+    assert merged["roots"]["other"]["children"][0]["name"] == "Imported from Chrome"
+    assert preview.merge_strategy == "edge-wins"
+
+
+def test_merge_folders_reports_no_new_wrapper_folder():
+    chrome = data()
+    edge = data()
+    chrome["roots"]["bookmark_bar"]["children"] = [
+        {
+            "type": "folder",
+            "id": "10",
+            "name": "Shared",
+            "children": [{"type": "url", "id": "11", "name": "Chrome", "url": "https://chrome.test"}],
+        }
+    ]
+    edge["roots"]["bookmark_bar"]["children"] = [
+        {
+            "type": "folder",
+            "id": "20",
+            "name": "shared",
+            "children": [{"type": "url", "id": "21", "name": "Edge", "url": "https://edge.test"}],
+        }
+    ]
+
+    merged, preview = prepare_merged_data(chrome, edge, merge_strategy="merge-folders")
+    shared = merged["roots"]["bookmark_bar"]["children"][0]
+
+    assert [node["url"] for node in iter_urls(shared)] == ["https://chrome.test", "https://edge.test"]
+    assert not merged["roots"]["other"]["children"]
+    assert preview.folders_added == 0
+
+
+def test_cli_dry_run_does_not_create_backups_or_write_profiles(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    chrome = tmp_path / "Chrome" / "Default"
+    edge = tmp_path / "Edge" / "Default"
+    backup_dir = tmp_path / "backups"
+    chrome.mkdir(parents=True)
+    edge.mkdir(parents=True)
+    chrome_path = chrome / "Bookmarks"
+    edge_path = edge / "Bookmarks"
+    chrome_original = json.dumps(data("https://chrome.test"))
+    edge_original = json.dumps(data("https://edge.test"))
+    chrome_path.write_text(chrome_original)
+    edge_path.write_text(edge_original)
+
+    exit_code = main(
+        [
+            "--dry-run",
+            "--chrome-profile",
+            str(chrome),
+            "--edge-profile",
+            str(edge),
+            "--backup-dir",
+            str(backup_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    assert "Strategy: chrome-wins" in capsys.readouterr().out
+    assert chrome_path.read_text() == chrome_original
+    assert edge_path.read_text() == edge_original
+    assert not backup_dir.exists()
 
 
 def test_close_browsers_terminates_detected_processes_then_synchronizes(
@@ -540,6 +694,8 @@ def test_gui_error_shows_detected_browser_processes(monkeypatch: pytest.MonkeyPa
     app.keep = Value(30)
     app.deduplicate = Value(False)
     app.alphabetize = Value(False)
+    app.duplicate_mode = Value("conservative")
+    app.merge_strategy = Value("chrome-wins")
     errors: list[tuple[str, str]] = []
     monkeypatch.setattr(sync_module.messagebox, "askyesno", lambda *args: True)
     monkeypatch.setattr(sync_module.messagebox, "showerror", lambda title, message: errors.append((title, message)))
@@ -552,4 +708,231 @@ def test_gui_error_shows_detected_browser_processes(monkeypatch: pytest.MonkeyPa
     App._run(app, True)
 
     assert errors == [(sync_module.APP_NAME, "Synchronization blocked: chrome.exe, msedge.exe")]
+
+
+def test_conservative_url_matching_preserves_case_and_trailing_slash():
+    assert normalized_url("HTTPS://Example.COM/Reports/Q1") == "https://example.com/Reports/Q1"
+    assert normalized_url("https://example.com/reports/q1") != normalized_url("https://example.com/Reports/Q1")
+    assert normalized_url("https://example.com/") != normalized_url("https://example.com")
+
+
+def test_aggressive_url_matching_is_explicit():
+    assert normalized_url("HTTPS://Example.COM/Reports/Q1/", "aggressive") == normalized_url(
+        "https://example.com/reports/q1", "aggressive"
+    )
+
+
+@pytest.mark.parametrize("strategy", sync_module.MERGE_STRATEGIES)
+def test_all_merge_strategies_produce_a_union(strategy: str):
+    merged, preview = prepare_merged_data(
+        data("https://chrome.test"),
+        data("https://edge.test"),
+        merge_strategy=strategy,
+    )
+    urls = {node["url"] for root in merged["roots"].values() for node in iter_urls(root)}
+
+    assert urls == {"https://chrome.test", "https://edge.test"}
+    assert preview.merge_strategy == strategy
+    assert preview.merged_count == 2
+
+
+def test_merge_folders_combines_matching_folder_names():
+    chrome = data()
+    edge = data()
+    chrome["roots"]["bookmark_bar"]["children"] = [
+        {"type": "folder", "id": "10", "name": "Shared", "children": [{"type": "url", "id": "11", "name": "A", "url": "https://a.test"}]}
+    ]
+    edge["roots"]["bookmark_bar"]["children"] = [
+        {"type": "folder", "id": "20", "name": "shared", "children": [{"type": "url", "id": "21", "name": "B", "url": "https://b.test"}]}
+    ]
+
+    merged, _ = prepare_merged_data(chrome, edge, merge_strategy="merge-folders")
+    folders = merged["roots"]["bookmark_bar"]["children"]
+
+    assert len(folders) == 1
+    assert {node["url"] for node in iter_urls(folders[0])} == {"https://a.test", "https://b.test"}
+
+
+def test_dry_run_creates_no_backup_or_write(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    chrome = tmp_path / "Chrome" / "Default"
+    edge = tmp_path / "Edge" / "Default"
+    chrome.mkdir(parents=True)
+    edge.mkdir(parents=True)
+    chrome_path = chrome / "Bookmarks"
+    edge_path = edge / "Bookmarks"
+    chrome_original = json.dumps(data("https://chrome.test"))
+    edge_original = json.dumps(data("https://edge.test"))
+    chrome_path.write_text(chrome_original)
+    edge_path.write_text(edge_original)
+
+    exit_code = main(["--dry-run", "--chrome-profile", str(chrome), "--edge-profile", str(edge), "--backup-dir", str(tmp_path / "backups")])
+
+    assert exit_code == 0
+    assert "Final bookmark count: 2" in capsys.readouterr().out
+    assert not (tmp_path / "backups").exists()
+    assert chrome_path.read_text() == chrome_original
+    assert edge_path.read_text() == edge_original
+
+
+def test_manifest_validates_and_detects_tampering(tmp_path: Path):
+    chrome = tmp_path / "Chrome" / "Default"
+    edge = tmp_path / "Edge" / "Default"
+    chrome.mkdir(parents=True)
+    edge.mkdir(parents=True)
+    (chrome / "Bookmarks").write_text(json.dumps(data("https://chrome.test")))
+    (edge / "Bookmarks").write_text(json.dumps(data("https://edge.test")))
+
+    result = synchronize(chrome, edge, tmp_path / "backups", write=False)
+    validate_backup_manifest(result.manifest_path)
+    result.html_path.write_text("tampered")
+
+    with pytest.raises(RuntimeError, match="integrity validation failed"):
+        validate_backup_manifest(result.manifest_path)
+
+    result.manifest_path.write_text(
+        json.dumps({"files": [{"name": "../outside.json", "size": 0, "sha256": "0" * 64}]})
+    )
+    with pytest.raises(RuntimeError, match="invalid file entry"):
+        validate_backup_manifest(result.manifest_path)
+
+
+def test_operation_log_does_not_include_bookmark_urls(tmp_path: Path):
+    chrome = tmp_path / "Chrome" / "Default"
+    edge = tmp_path / "Edge" / "Default"
+    chrome.mkdir(parents=True)
+    edge.mkdir(parents=True)
+    (chrome / "Bookmarks").write_text(json.dumps(data("https://private.example/token=secret")))
+    (edge / "Bookmarks").write_text(json.dumps(data("https://edge.test")))
+
+    result = synchronize(chrome, edge, tmp_path / "backups", write=False, verbose=True)
+    log = result.log_path.read_text()
+
+    assert "backup_export_complete" in log
+    assert "private.example" not in log
+    assert "secret" not in log
+
+
+def test_profile_mapping_round_trip(tmp_path: Path):
+    path = tmp_path / "profile-mappings.json"
+    save_profile_mapping(path, ProfileMapping("Personal", Path("C:/Chrome"), Path("C:/Edge"), Path("D:/Backups")))
+    save_profile_mapping(path, ProfileMapping("Work", Path("W:/Chrome"), Path("W:/Edge"), Path("W:/Backups")))
+
+    mappings = load_profile_mappings(path)
+
+    assert sorted(mappings) == ["Personal", "Work"]
+    assert mappings["Personal"].backup_dir == Path("D:/Backups")
+
+
+def test_profile_mapping_rejects_invalid_document_shape(tmp_path: Path):
+    path = tmp_path / "profile-mappings.json"
+    path.write_text("[]")
+
+    with pytest.raises(RuntimeError, match="must contain a mappings list"):
+        load_profile_mappings(path)
+
+
+def test_restore_json_backup_preserves_current_file(tmp_path: Path):
+    profile = tmp_path / "Chrome" / "Default"
+    profile.mkdir(parents=True)
+    current = data("https://current.test")
+    replacement = data("https://restored.test")
+    (profile / "Bookmarks").write_text(json.dumps(current))
+    backup = tmp_path / "Chrome_backup.json"
+    backup.write_text(json.dumps(replacement))
+
+    preserved = restore_json_backup(backup, profile, "Chrome", tmp_path / "recovery")
+
+    assert json.loads((profile / "Bookmarks").read_text()) == replacement
+    assert json.loads(preserved.read_text()) == current
+
+
+def test_restore_rejects_html_backup(tmp_path: Path):
+    html_backup = tmp_path / "Bookmarks_backup.html"
+    html_backup.write_text("<html></html>")
+
+    with pytest.raises(RuntimeError, match="requires a raw JSON"):
+        restore_json_backup(html_backup, tmp_path, "Chrome", tmp_path)
+
+
+def test_task_scheduler_script_defaults_to_backup_only(tmp_path: Path):
+    destination = tmp_path / "register-task.ps1"
+    write_task_scheduler_script(
+        destination,
+        Path("C:/Chrome Profile"),
+        Path("C:/Edge Profile"),
+        Path("D:/Backups"),
+        "Bookmark Backup",
+        "03:30",
+    )
+    script = destination.read_text()
+
+    assert "Register-ScheduledTask" in script
+    assert "--sync" not in script
+    assert "03:30" in script
+
+
+def test_task_scheduler_sync_requires_explicit_opt_in(tmp_path: Path):
+    destination = tmp_path / "register-sync-task.ps1"
+    write_task_scheduler_script(
+        destination,
+        Path("C:/Chrome"),
+        Path("C:/Edge"),
+        Path("D:/Backups"),
+        "Bookmark Sync",
+        "04:00",
+        synchronize_task=True,
+    )
+
+    assert "--sync" in destination.read_text()
+
+
+def test_task_scheduler_uses_standalone_executable_when_frozen(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    destination = tmp_path / "standalone-task.ps1"
+    monkeypatch.setattr(sync_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sync_module.sys, "executable", "C:/Tools/BrowserBookmarkTool.exe")
+
+    write_task_scheduler_script(
+        destination,
+        Path("C:/Chrome"),
+        Path("C:/Edge"),
+        Path("D:/Backups"),
+        "Bookmark Backup",
+        "02:00",
+    )
+    script = destination.read_text()
+
+    assert "C:/Tools/BrowserBookmarkTool.exe" in script
+    assert "browser_bookmark_sync" not in script
+
+
+def test_task_scheduler_rejects_invalid_time(tmp_path: Path):
+    with pytest.raises(RuntimeError, match="24-hour HH:MM"):
+        write_task_scheduler_script(
+            tmp_path / "task.ps1",
+            Path("C:/Chrome"),
+            Path("C:/Edge"),
+            Path("D:/Backups"),
+            "Bookmark Backup",
+            "25:99",
+        )
+
+
+def test_cli_dry_run_processes_multiple_named_mappings(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    mapping_file = tmp_path / "profile-mappings.json"
+    for name in ("Personal", "Work"):
+        chrome = tmp_path / name / "Chrome"
+        edge = tmp_path / name / "Edge"
+        chrome.mkdir(parents=True)
+        edge.mkdir(parents=True)
+        (chrome / "Bookmarks").write_text(json.dumps(data(f"https://{name.casefold()}-chrome.test")))
+        (edge / "Bookmarks").write_text(json.dumps(data(f"https://{name.casefold()}-edge.test")))
+        save_profile_mapping(mapping_file, ProfileMapping(name, chrome, edge, tmp_path / name / "Backups"))
+
+    exit_code = main(["--dry-run", "--profile-map", str(mapping_file)])
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "[Personal]" in output
+    assert "[Work]" in output
+    assert output.count("Final bookmark count: 2") == 2
 
