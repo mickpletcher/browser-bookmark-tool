@@ -8,10 +8,19 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
-- Added `future-upgrades.md` with three priority tiers, acceptance criteria, and eleven proposed upgrades.
+- Added `future-upgrades.md` with three priority tiers, acceptance criteria, and thirteen proposed upgrades.
 - Added `completed-upgrades.md` with promotion rules and the version 0.2.0 capability baseline.
 - Added deterministic Ruff configuration and version control to the Priority 1 upgrade backlog after live Windows CI exposed dependency drift.
 - Added phased Safari backup and synchronization on macOS to the Priority 2 backlog with bookmark-only scope, iCloud warnings, and transactional write requirements.
+- Added native macOS Chrome and Edge compatibility to the Priority 2 backlog as the platform foundation that must precede Safari support.
+- Added a private versioned automation configuration and sanitized example for local AI and deterministic schedulers.
+- Added `--check-automation` for no-write configuration, mapping, bookmark, destination, lock, and process readiness checks.
+- Added `--run-automation` with atomic concurrency locking and privacy-safe structured JSON results.
+- Added `Invoke-BrowserBookmarkAutomation.ps1` as the common local Codex, Claude, Copilot, and Task Scheduler entrypoint.
+- Added `SCHEDULING.md` with setup instructions, execution boundaries, result schema, failure handling, and copy-ready model prompts.
+- Documented the supported local scheduling paths for Codex desktop tasks, Claude Desktop local tasks, Claude Code session loops, and GitHub Copilot CLI, including each cloud or session boundary.
+- Added active-run, stale-lock, backup, dry-run, blocked synchronization, browser-closing sync, privacy, CLI, and PowerShell wrapper regression coverage.
+- Added scheduled-run health and failure notifications to the Priority 2 backlog as the replacement candidate for the completed scheduler execution contract.
 
 ### Security
 
@@ -20,6 +29,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - Disabled persisted checkout credentials and added a 20-minute timeout to the SHA-pinned Windows CI job.
 - Restricted Actions to GitHub-owned actions while retaining required full commit SHA pinning and read-only workflow permissions.
 - Strengthened `main` protection with linear-history and review-conversation-resolution requirements while retaining administrator enforcement and force-push and deletion blocks.
+- Prevented scheduled runs from using the process-detection `--force` bypass.
+- Excluded private automation configurations, results, and lock files from Git.
+- Restricted scheduled structured output to counts, mapping names, operation status, process names, and privacy-safe errors without bookmark URLs or local paths.
 
 ### Changed
 
@@ -31,6 +43,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - Disabled unused GitHub Projects and Wiki features while retaining Issues and the existing disabled Discussions and Pages state.
 - Standardized pull requests on squash merge, enabled branch update suggestions, and enabled automatic deletion of merged branches.
 - Recorded the live Windows CI Ruff 0.16.2 lint failure as a release-readiness finding; tests pass before the failing lint step.
+- Defined explicit Ruff rules and a supported `ruff>=0.16.2,<0.17` range so local and Windows CI lint behavior does not drift silently.
+- Updated the maintained test suite to 77 passing cases.
 
 ## [0.2.0] - 2026-08-07
 

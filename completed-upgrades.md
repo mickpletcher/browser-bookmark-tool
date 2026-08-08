@@ -44,3 +44,11 @@ The following capabilities were already complete when the upgrade tracking files
 - Summary: Adds named multi-profile mappings, privacy-safe logs, Task Scheduler script generation, a standalone Windows build, and SHA-pinned Windows CI.
 - Verification: Mapping, logging, task generation, GUI, CLI, batch launcher, PyInstaller, and workflow checks pass.
 
+## Completed after backlog tracking
+
+### COMP-001: Scheduler-safe local AI execution contract
+
+- Completed: 2026-08-07
+- Release: Unreleased
+- Summary: Adds a vendor-neutral local PowerShell entrypoint, private versioned configuration, no-write readiness checks, active and stale run locking, atomic privacy-safe JSON results, and copy-ready boundaries for Codex, Claude, and Copilot scheduling.
+- Verification: Configuration validation, readiness, concurrency, stale-lock recovery, backup, dry-run, blocked synchronization, explicit browser closure, structured-result privacy, CLI routing, and PowerShell wrapper execution tests pass. Scheduled execution has no `--force` option.

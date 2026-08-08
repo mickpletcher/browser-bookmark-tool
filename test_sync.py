@@ -1,33 +1,39 @@
 import json
 import os
-from pathlib import Path
+import shutil
+import subprocess
 import uuid
+from pathlib import Path
 
 import pytest
 
 import browser_bookmark_sync as sync_module
 from browser_bookmark_sync import (
     App,
+    AutomationRunLock,
+    ProfileMapping,
     alphabetize_bookmarks,
+    automation_readiness,
     close_browser_processes,
     deduplicate_bookmarks,
     export_html,
     iter_urls,
-    main,
+    load_automation_config,
     load_profile_mappings,
+    main,
     merge_bookmarks,
     normalized_url,
     parse_args,
     prepare_merged_data,
     prune_backups,
-    ProfileMapping,
     restore_json_backup,
+    run_automation,
     running_browser_processes,
-    synchronize,
-    validate_unique_guids,
-    validate_backup_manifest,
-    write_task_scheduler_script,
     save_profile_mapping,
+    synchronize,
+    validate_backup_manifest,
+    validate_unique_guids,
+    write_task_scheduler_script,
 )
 
 
@@ -935,4 +941,312 @@ def test_cli_dry_run_processes_multiple_named_mappings(tmp_path: Path, capsys: p
     assert "[Personal]" in output
     assert "[Work]" in output
     assert output.count("Final bookmark count: 2") == 2
+
+
+def automation_files(
+    tmp_path: Path,
+    operation: str = "backup",
+    browser_behavior: str = "block",
+) -> tuple[Path, Path, Path, Path, Path]:
+    chrome = tmp_path / "Chrome" / "Default"
+    edge = tmp_path / "Edge" / "Default"
+    chrome.mkdir(parents=True)
+    edge.mkdir(parents=True)
+    (chrome / "Bookmarks").write_text(json.dumps(data("https://chrome.private.test")))
+    (edge / "Bookmarks").write_text(json.dumps(data("https://edge.private.test")))
+    backup_dir = tmp_path / "Backups"
+    mapping_file = tmp_path / "profile-mappings.private.json"
+    save_profile_mapping(mapping_file, ProfileMapping("Personal", chrome, edge, backup_dir))
+    result_file = tmp_path / "automation-result.json"
+    lock_file = tmp_path / "automation.lock"
+    config_file = tmp_path / "automation-config.private.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "operation": operation,
+                "profile_map": mapping_file.name,
+                "mappings": ["Personal"],
+                "keep": 50,
+                "deduplicate": False,
+                "alphabetize": False,
+                "duplicate_mode": "conservative",
+                "merge_strategy": "chrome-wins",
+                "browser_behavior": browser_behavior,
+                "result_file": result_file.name,
+                "lock_file": lock_file.name,
+                "lock_timeout_minutes": 5,
+            }
+        )
+    )
+    return config_file, chrome, edge, backup_dir, result_file
+
+
+def test_load_automation_config_resolves_private_relative_paths(tmp_path: Path):
+    config_file, _, _, _, result_file = automation_files(tmp_path)
+
+    config = load_automation_config(config_file)
+
+    assert config.operation == "backup"
+    assert config.profile_map == tmp_path / "profile-mappings.private.json"
+    assert config.result_file == result_file
+    assert config.lock_file == tmp_path / "automation.lock"
+    assert config.mappings == ("Personal",)
+
+
+def test_automation_requires_absolute_profile_mapping_paths(tmp_path: Path):
+    config_file, _, _, _, _ = automation_files(tmp_path)
+    mapping_file = tmp_path / "profile-mappings.private.json"
+    mapping_file.write_text(
+        json.dumps(
+            {
+                "mappings": [
+                    {
+                        "name": "Personal",
+                        "chrome_profile": "relative/chrome",
+                        "edge_profile": "relative/edge",
+                        "backup_dir": "relative/backups",
+                    }
+                ]
+            }
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="absolute"):
+        sync_module.selected_automation_mappings(load_automation_config(config_file))
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("schema_version", 2, "schema_version"),
+        ("operation", "delete", "operation"),
+        ("keep", 51, "keep"),
+        ("mappings", ["Personal", "Personal"], "unique"),
+        ("duplicate_mode", "unsafe", "duplicate_mode"),
+        ("merge_strategy", "replace", "merge_strategy"),
+        ("lock_timeout_minutes", 1, "lock_timeout_minutes"),
+    ],
+)
+def test_automation_config_rejects_invalid_values(tmp_path: Path, field: str, value: object, message: str):
+    config_file, _, _, _, _ = automation_files(tmp_path)
+    document = json.loads(config_file.read_text())
+    document[field] = value
+    config_file.write_text(json.dumps(document))
+
+    with pytest.raises(RuntimeError, match=message):
+        load_automation_config(config_file)
+
+
+def test_automation_config_allows_close_only_for_sync(tmp_path: Path):
+    config_file, _, _, _, _ = automation_files(tmp_path, browser_behavior="close")
+
+    with pytest.raises(RuntimeError, match="only when operation is sync"):
+        load_automation_config(config_file)
+
+    document = json.loads(config_file.read_text())
+    document["operation"] = "sync"
+    config_file.write_text(json.dumps(document))
+    assert load_automation_config(config_file).browser_behavior == "close"
+
+
+def test_automation_lock_blocks_concurrent_runs_and_cleans_up(tmp_path: Path):
+    lock_file = tmp_path / "automation.lock"
+
+    with AutomationRunLock(lock_file, 5):
+        assert lock_file.exists()
+        with pytest.raises(RuntimeError, match="already active"):
+            with AutomationRunLock(lock_file, 5):
+                pass
+
+    assert not lock_file.exists()
+
+
+def test_automation_lock_replaces_stale_lock(tmp_path: Path):
+    lock_file = tmp_path / "automation.lock"
+    lock_file.write_text("stale")
+    old = sync_module.time.time() - 600
+    os.utime(lock_file, (old, old))
+
+    with AutomationRunLock(lock_file, 5):
+        assert json.loads(lock_file.read_text())["pid"] == os.getpid()
+
+    assert not lock_file.exists()
+
+
+def test_automation_readiness_reports_process_warning_without_private_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    config_file, chrome, _, _, _ = automation_files(tmp_path, operation="sync")
+    monkeypatch.setattr(sync_module, "running_browser_processes", lambda: ["chrome.exe"])
+
+    document = automation_readiness(load_automation_config(config_file))
+    serialized = json.dumps(document)
+
+    assert document["status"] == "ready"
+    assert document["detected_processes"] == ["chrome.exe"]
+    assert "block synchronization" in document["warnings"][0]
+    assert str(chrome) not in serialized
+
+
+def test_run_backup_automation_writes_privacy_safe_result(tmp_path: Path):
+    config_file, chrome, edge, backup_dir, result_file = automation_files(tmp_path)
+    chrome_before = (chrome / "Bookmarks").read_text()
+    edge_before = (edge / "Bookmarks").read_text()
+
+    exit_code, document = run_automation(load_automation_config(config_file))
+    written = json.loads(result_file.read_text())
+    serialized = json.dumps(written)
+
+    assert exit_code == 0
+    assert document == written
+    assert written["status"] == "success"
+    assert written["mappings"][0]["backup_created"]
+    assert not written["mappings"][0]["synchronized"]
+    assert (chrome / "Bookmarks").read_text() == chrome_before
+    assert (edge / "Bookmarks").read_text() == edge_before
+    assert len(list(backup_dir.glob("Chrome_*.json"))) == 1
+    assert "https://" not in serialized
+    assert str(chrome) not in serialized
+
+
+def test_run_dry_run_automation_creates_no_backups(tmp_path: Path):
+    config_file, _, _, backup_dir, result_file = automation_files(tmp_path, operation="dry-run")
+
+    exit_code, document = run_automation(load_automation_config(config_file))
+
+    assert exit_code == 0
+    assert document["mappings"][0]["merged_count"] == 2
+    assert not backup_dir.exists()
+    assert result_file.exists()
+
+
+def test_run_sync_automation_blocks_browsers_after_backup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    config_file, _, _, backup_dir, result_file = automation_files(tmp_path, operation="sync")
+    monkeypatch.setattr(sync_module, "running_browser_processes", lambda: ["chrome.exe"])
+
+    exit_code, document = run_automation(load_automation_config(config_file))
+
+    assert exit_code == 1
+    assert document["status"] == "failed"
+    assert document["mappings"][0]["backup_created"]
+    assert not document["mappings"][0]["synchronized"]
+    assert "chrome.exe" in document["error"]
+    assert len(list(backup_dir.glob("Chrome_*.json"))) == 1
+    assert json.loads(result_file.read_text()) == document
+
+
+def test_run_sync_automation_reports_backups_after_transaction_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    config_file, _, _, _, _ = automation_files(tmp_path, operation="sync")
+
+    def fail_write(*_args: object) -> None:
+        raise RuntimeError("simulated write failure")
+
+    monkeypatch.setattr(sync_module, "transactional_json_write", fail_write)
+
+    exit_code, document = run_automation(load_automation_config(config_file))
+
+    result = document["mappings"][0]
+    assert exit_code == 1
+    assert result["backup_created"]
+    assert result["html_created"]
+    assert result["manifest_validated"]
+    assert not result["synchronized"]
+
+
+def test_run_sync_automation_can_explicitly_close_browsers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    config_file, chrome, edge, _, _ = automation_files(tmp_path, operation="sync", browser_behavior="close")
+    process_checks = iter([["chrome.exe", "msedge.exe"], []])
+    closed: list[str] = []
+    monkeypatch.setattr(sync_module, "running_browser_processes", lambda: next(process_checks, []))
+    monkeypatch.setattr(sync_module, "close_browser_processes", lambda processes: closed.extend(processes))
+
+    exit_code, document = run_automation(load_automation_config(config_file))
+
+    assert exit_code == 0
+    assert closed == ["chrome.exe", "msedge.exe"]
+    assert document["mappings"][0]["synchronized"]
+    assert document["mappings"][0]["browsers_closed"] == ["chrome.exe", "msedge.exe"]
+    assert json.loads((chrome / "Bookmarks").read_text()) == json.loads((edge / "Bookmarks").read_text())
+
+
+def test_cli_checks_and_runs_automation_config(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    config_file, _, _, _, result_file = automation_files(tmp_path)
+
+    assert main(["--check-automation", str(config_file)]) == 0
+    readiness = json.loads(capsys.readouterr().out)
+    assert readiness["status"] == "ready"
+
+    assert main(["--run-automation", str(config_file)]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "success"
+    assert result_file.exists()
+
+
+def test_cli_concurrent_automation_does_not_replace_active_result(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    config_file, _, _, _, result_file = automation_files(tmp_path)
+    result_file.write_text(json.dumps({"active_run": True}))
+    config = load_automation_config(config_file)
+
+    with AutomationRunLock(config.lock_file, config.lock_timeout_minutes):
+        exit_code = main(["--run-automation", str(config_file)])
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert output["status"] == "failed"
+    assert "already active" in output["error"]
+    assert json.loads(result_file.read_text()) == {"active_run": True}
+
+
+def test_cli_automation_rejects_process_overrides(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    config_file, _, _, _, result_file = automation_files(tmp_path)
+
+    exit_code = main(["--run-automation", str(config_file), "--force"])
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert "private configuration" in output["error"]
+    assert not result_file.exists()
+
+
+def test_powershell_automation_wrapper_runs_readiness_check(tmp_path: Path):
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if not powershell:
+        pytest.skip("PowerShell is unavailable")
+    config_file, _, _, _, _ = automation_files(tmp_path)
+    script = Path(__file__).with_name("Invoke-BrowserBookmarkAutomation.ps1")
+
+    completed = subprocess.run(
+        [powershell, "-NoProfile", "-File", script, "-ConfigPath", config_file, "-Mode", "Check"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["status"] == "ready"
+
+    completed = subprocess.run(
+        [powershell, "-NoProfile", "-File", script, "-ConfigPath", config_file, "-Mode", "Run"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["status"] == "success"
+    assert (tmp_path / "automation-result.json").exists()
 

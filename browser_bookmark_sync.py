@@ -17,12 +17,12 @@ import time
 import tkinter as tk
 import uuid
 import webbrowser
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from typing import Any, Iterable
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
-
 
 APP_NAME = "Browser Bookmark Tool"
 ROOT_NAMES = ("bookmark_bar", "other", "synced")
@@ -30,6 +30,9 @@ BROWSER_PROCESS_NAMES = ("chrome.exe", "msedge.exe")
 MAX_BACKUPS = 50
 DUPLICATE_MODES = ("conservative", "aggressive")
 MERGE_STRATEGIES = ("chrome-wins", "edge-wins", "preserve-both", "merge-folders", "dated-folder")
+AUTOMATION_SCHEMA_VERSION = 1
+AUTOMATION_OPERATIONS = ("backup", "sync", "dry-run")
+AUTOMATION_BROWSER_BEHAVIORS = ("block", "close")
 BACKUP_NAME_PATTERN = re.compile(
     r"^(?P<prefix>Chrome|Edge|Bookmarks|Manifest)_"
     r"(?P<stamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:_\d{6})?)"
@@ -128,6 +131,176 @@ class ProfileMapping:
     chrome_profile: Path
     edge_profile: Path
     backup_dir: Path
+
+
+@dataclass(frozen=True)
+class AutomationConfig:
+    source: Path
+    operation: str
+    profile_map: Path
+    mappings: tuple[str, ...]
+    keep: int
+    deduplicate: bool
+    alphabetize: bool
+    duplicate_mode: str
+    merge_strategy: str
+    browser_behavior: str
+    result_file: Path
+    lock_file: Path
+    lock_timeout_minutes: int
+
+
+def config_relative_path(value: str, source: Path) -> Path:
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else (source.parent / path).resolve()
+
+
+def load_automation_config(path: Path) -> AutomationConfig:
+    source = path.expanduser().resolve()
+    try:
+        document = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Could not read the private automation configuration.") from exc
+    if not isinstance(document, dict):
+        raise RuntimeError("The automation configuration must be a JSON object.")
+    if document.get("schema_version") != AUTOMATION_SCHEMA_VERSION:
+        raise RuntimeError(f"Automation schema_version must be {AUTOMATION_SCHEMA_VERSION}.")
+
+    operation = document.get("operation")
+    if operation not in AUTOMATION_OPERATIONS:
+        raise RuntimeError(f"Automation operation must be one of: {', '.join(AUTOMATION_OPERATIONS)}.")
+    profile_map_value = document.get("profile_map")
+    if not isinstance(profile_map_value, str) or not profile_map_value.strip():
+        raise RuntimeError("Automation profile_map must be a non-empty path string.")
+
+    mappings_value = document.get("mappings", [])
+    if (
+        not isinstance(mappings_value, list)
+        or any(not isinstance(name, str) or not name.strip() for name in mappings_value)
+        or len(mappings_value) != len(set(mappings_value))
+    ):
+        raise RuntimeError("Automation mappings must be a list of unique non-empty names.")
+
+    keep_value = document.get("keep", MAX_BACKUPS)
+    if isinstance(keep_value, bool) or not isinstance(keep_value, int) or not 1 <= keep_value <= MAX_BACKUPS:
+        raise RuntimeError(f"Automation keep must be a number from 1 to {MAX_BACKUPS}.")
+    for option in ("deduplicate", "alphabetize"):
+        if not isinstance(document.get(option, False), bool):
+            raise RuntimeError(f"Automation {option} must be true or false.")
+
+    duplicate_mode = document.get("duplicate_mode", "conservative")
+    if duplicate_mode not in DUPLICATE_MODES:
+        raise RuntimeError(f"Automation duplicate_mode must be one of: {', '.join(DUPLICATE_MODES)}.")
+    merge_strategy = document.get("merge_strategy", "chrome-wins")
+    if merge_strategy not in MERGE_STRATEGIES:
+        raise RuntimeError(f"Automation merge_strategy must be one of: {', '.join(MERGE_STRATEGIES)}.")
+    browser_behavior = document.get("browser_behavior", "block")
+    if browser_behavior not in AUTOMATION_BROWSER_BEHAVIORS:
+        raise RuntimeError(
+            f"Automation browser_behavior must be one of: {', '.join(AUTOMATION_BROWSER_BEHAVIORS)}."
+        )
+    if operation != "sync" and browser_behavior != "block":
+        raise RuntimeError("Automation browser_behavior can be close only when operation is sync.")
+
+    result_value = document.get("result_file", "browser-bookmark-automation-result.json")
+    lock_value = document.get("lock_file", "browser-bookmark-automation.lock")
+    if not isinstance(result_value, str) or not result_value.strip():
+        raise RuntimeError("Automation result_file must be a non-empty path string.")
+    if not isinstance(lock_value, str) or not lock_value.strip():
+        raise RuntimeError("Automation lock_file must be a non-empty path string.")
+    result_file = config_relative_path(result_value, source)
+    lock_file = config_relative_path(lock_value, source)
+    if result_file == lock_file:
+        raise RuntimeError("Automation result_file and lock_file must be different paths.")
+
+    lock_timeout = document.get("lock_timeout_minutes", 180)
+    if isinstance(lock_timeout, bool) or not isinstance(lock_timeout, int) or not 5 <= lock_timeout <= 1440:
+        raise RuntimeError("Automation lock_timeout_minutes must be from 5 to 1440.")
+
+    return AutomationConfig(
+        source=source,
+        operation=operation,
+        profile_map=config_relative_path(profile_map_value, source),
+        mappings=tuple(mappings_value),
+        keep=keep_value,
+        deduplicate=document.get("deduplicate", False),
+        alphabetize=document.get("alphabetize", False),
+        duplicate_mode=duplicate_mode,
+        merge_strategy=merge_strategy,
+        browser_behavior=browser_behavior,
+        result_file=result_file,
+        lock_file=lock_file,
+        lock_timeout_minutes=lock_timeout,
+    )
+
+
+class AutomationRunLock:
+    def __init__(self, path: Path, stale_minutes: int) -> None:
+        self.path = path
+        self.stale_seconds = stale_minutes * 60
+        self.token = str(uuid.uuid4())
+        self.acquired = False
+
+    def __enter__(self) -> AutomationRunLock:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        for _ in range(3):
+            try:
+                descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    age = time.time() - self.path.stat().st_mtime
+                except FileNotFoundError:
+                    continue
+                if age <= self.stale_seconds:
+                    raise RuntimeError("Another browser bookmark automation run is already active.") from None
+                stale = self.path.with_name(f"{self.path.name}.stale.{uuid.uuid4().hex}")
+                try:
+                    os.replace(self.path, stale)
+                except FileNotFoundError:
+                    continue
+                stale.unlink(missing_ok=True)
+                continue
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                json.dump(
+                    {
+                        "schema_version": AUTOMATION_SCHEMA_VERSION,
+                        "pid": os.getpid(),
+                        "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                        "token": self.token,
+                    },
+                    stream,
+                )
+                stream.flush()
+                os.fsync(stream.fileno())
+            self.acquired = True
+            return self
+        raise RuntimeError("Could not acquire the browser bookmark automation lock.")
+
+    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+        if not self.acquired:
+            return
+        try:
+            document = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if document.get("token") == self.token:
+            self.path.unlink(missing_ok=True)
+
+
+def write_json_atomic(path: Path, document: dict[str, Any]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".pending", dir=path.parent)
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            json.dump(document, stream, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return path
 
 
 def load_profile_mappings(path: Path) -> dict[str, ProfileMapping]:
@@ -916,6 +1089,247 @@ def synchronize(
     )
 
 
+def selected_automation_mappings(config: AutomationConfig) -> list[ProfileMapping]:
+    available = load_profile_mappings(config.profile_map)
+    names = list(config.mappings) or sorted(available)
+    missing = [name for name in names if name not in available]
+    if missing:
+        raise RuntimeError(f"Unknown automation mapping(s): {', '.join(missing)}.")
+    selected = [available[name] for name in names]
+    if any(
+        not path.is_absolute()
+        for mapping in selected
+        for path in (mapping.chrome_profile, mapping.edge_profile, mapping.backup_dir)
+    ):
+        raise RuntimeError("Automation profile mappings must use absolute browser and backup paths.")
+    return selected
+
+
+def writable_existing_parent(path: Path) -> bool:
+    candidate = path if path.is_dir() else path.parent
+    while not candidate.exists() and candidate != candidate.parent:
+        candidate = candidate.parent
+    return candidate.is_dir() and os.access(candidate, os.W_OK)
+
+
+def safe_automation_error(exc: Exception) -> str:
+    message = str(exc)
+    folded = message.casefold()
+    if (
+        folded.startswith("automation ")
+        or folded.startswith("the automation ")
+        or "private automation configuration" in folded
+    ):
+        return message
+    if "already active" in folded or "automation lock" in folded:
+        return "Another browser bookmark automation run is already active."
+    if "browser process" in folded or "synchronization blocked" in folded:
+        detected = [process for process in BROWSER_PROCESS_NAMES if process in folded]
+        suffix = f": {', '.join(detected)}" if detected else ""
+        return f"Synchronization was blocked by running browser processes{suffix}."
+    if "no bookmarks file" in folded:
+        return "A configured browser profile does not contain a Bookmarks file."
+    if "not valid json" in folded:
+        return "A configured browser bookmark file is not valid JSON."
+    if "unknown automation mapping" in folded:
+        return message
+    if "profile mapping" in folded:
+        return "The private profile mapping configuration is invalid."
+    return "Automation failed. Review the private local operation log for details."
+
+
+def automation_readiness(config: AutomationConfig) -> dict[str, Any]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    mapping_names: list[str] = []
+    try:
+        mappings = selected_automation_mappings(config)
+    except RuntimeError as exc:
+        mappings = []
+        errors.append(safe_automation_error(exc))
+    for mapping in mappings:
+        mapping_names.append(mapping.name)
+        try:
+            preview_synchronization(
+                mapping.chrome_profile,
+                mapping.edge_profile,
+                deduplicate=config.deduplicate,
+                alphabetize=config.alphabetize,
+                duplicate_mode=config.duplicate_mode,
+                merge_strategy=config.merge_strategy,
+            )
+        except (OSError, RuntimeError) as exc:
+            errors.append(f"{mapping.name}: {safe_automation_error(exc)}")
+        if not writable_existing_parent(mapping.backup_dir):
+            errors.append(f"{mapping.name}: The backup destination is not writable.")
+    if not writable_existing_parent(config.result_file):
+        errors.append("The automation result destination is not writable.")
+    if not writable_existing_parent(config.lock_file):
+        errors.append("The automation lock destination is not writable.")
+
+    if config.lock_file.exists():
+        age = time.time() - config.lock_file.stat().st_mtime
+        if age <= config.lock_timeout_minutes * 60:
+            errors.append("Another browser bookmark automation run is already active.")
+        else:
+            warnings.append("A stale automation lock will be replaced when the run starts.")
+
+    try:
+        processes = running_browser_processes()
+    except RuntimeError:
+        processes = []
+        errors.append("Browser process detection is unavailable.")
+    if processes and config.operation == "sync":
+        if config.browser_behavior == "close":
+            warnings.append("The scheduled run will force-close detected browser processes before synchronization.")
+        else:
+            warnings.append(
+                "The scheduled run will create backups and an HTML export, then block synchronization if browsers remain open."
+            )
+
+    return {
+        "schema_version": AUTOMATION_SCHEMA_VERSION,
+        "kind": "automation-readiness",
+        "status": "ready" if not errors else "not-ready",
+        "operation": config.operation,
+        "mappings": mapping_names,
+        "detected_processes": processes,
+        "warnings": warnings,
+        "errors": errors,
+    }
+
+
+def preview_result(name: str, preview: SyncPreview) -> dict[str, Any]:
+    return {
+        "name": name,
+        "status": "success",
+        "chrome_count": preview.chrome_count,
+        "edge_count": preview.edge_count,
+        "merged_count": preview.merged_count,
+        "duplicates_removed": preview.duplicates_removed,
+        "folders_added": preview.folders_added,
+        "folders_reordered": preview.folders_reordered,
+        "backup_created": False,
+        "html_created": False,
+        "manifest_validated": False,
+        "synchronized": False,
+        "browsers_closed": [],
+    }
+
+
+def sync_result(name: str, result: SyncResult, synchronized: bool) -> dict[str, Any]:
+    return {
+        "name": name,
+        "status": "success",
+        "chrome_count": result.chrome_count,
+        "edge_count": result.edge_count,
+        "merged_count": result.merged_count,
+        "duplicates_removed": result.duplicates_removed,
+        "folders_added": result.preview.folders_added,
+        "folders_reordered": result.preview.folders_reordered,
+        "backup_created": True,
+        "html_created": True,
+        "manifest_validated": True,
+        "synchronized": synchronized,
+        "browsers_closed": list(result.closed_processes),
+    }
+
+
+def automation_artifact_names(backup_dir: Path) -> dict[str, set[str]]:
+    artifacts = {prefix: set() for prefix in ("Chrome", "Edge", "Bookmarks", "Manifest")}
+    if not backup_dir.is_dir():
+        return artifacts
+    for path in backup_dir.iterdir():
+        match = BACKUP_NAME_PATTERN.fullmatch(path.name)
+        if path.is_file() and match:
+            artifacts[match.group("prefix")].add(path.name)
+    return artifacts
+
+
+def run_automation(config: AutomationConfig) -> tuple[int, dict[str, Any]]:
+    started_at = dt.datetime.now(dt.timezone.utc)
+    started_timer = time.monotonic()
+    mapping_results: list[dict[str, Any]] = []
+    current_mapping = "configuration"
+    exit_code = 0
+    error: str | None = None
+    failure_artifacts = {
+        "backup_created": False,
+        "html_created": False,
+        "manifest_validated": False,
+    }
+    with AutomationRunLock(config.lock_file, config.lock_timeout_minutes):
+        try:
+            mappings = selected_automation_mappings(config)
+            for mapping in mappings:
+                current_mapping = mapping.name
+                if config.operation == "dry-run":
+                    preview = preview_synchronization(
+                        mapping.chrome_profile,
+                        mapping.edge_profile,
+                        deduplicate=config.deduplicate,
+                        alphabetize=config.alphabetize,
+                        duplicate_mode=config.duplicate_mode,
+                        merge_strategy=config.merge_strategy,
+                    )
+                    mapping_results.append(preview_result(mapping.name, preview))
+                    continue
+                before = automation_artifact_names(mapping.backup_dir)
+                try:
+                    result = synchronize(
+                        mapping.chrome_profile,
+                        mapping.edge_profile,
+                        mapping.backup_dir,
+                        keep=config.keep,
+                        write=config.operation == "sync",
+                        deduplicate=config.deduplicate,
+                        alphabetize=config.alphabetize,
+                        force=False,
+                        close_browsers=config.browser_behavior == "close",
+                        duplicate_mode=config.duplicate_mode,
+                        merge_strategy=config.merge_strategy,
+                    )
+                except Exception:
+                    after = automation_artifact_names(mapping.backup_dir)
+                    failure_artifacts = {
+                        "backup_created": bool(after["Chrome"] - before["Chrome"])
+                        and bool(after["Edge"] - before["Edge"]),
+                        "html_created": bool(after["Bookmarks"] - before["Bookmarks"]),
+                        "manifest_validated": bool(after["Manifest"] - before["Manifest"]),
+                    }
+                    raise
+                mapping_results.append(sync_result(mapping.name, result, config.operation == "sync"))
+        except Exception as exc:
+            exit_code = 1
+            error = safe_automation_error(exc)
+            mapping_results.append(
+                {
+                    "name": current_mapping,
+                    "status": "failed",
+                    **failure_artifacts,
+                    "synchronized": False,
+                    "browsers_closed": [],
+                    "error": error,
+                }
+            )
+        completed_at = dt.datetime.now(dt.timezone.utc)
+        document: dict[str, Any] = {
+            "schema_version": AUTOMATION_SCHEMA_VERSION,
+            "kind": "automation-result",
+            "status": "success" if exit_code == 0 else "failed",
+            "operation": config.operation,
+            "started_at": started_at.isoformat(),
+            "completed_at": completed_at.isoformat(),
+            "duration_seconds": round(time.monotonic() - started_timer, 3),
+            "exit_code": exit_code,
+            "mappings": mapping_results,
+        }
+        if error:
+            document["error"] = error
+        write_json_atomic(config.result_file, document)
+    return exit_code, document
+
+
 class App(ttk.Frame):
     def __init__(self, master: tk.Tk) -> None:
         super().__init__(master, padding=18)
@@ -1134,6 +1548,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     operation_options = parser.add_mutually_exclusive_group()
     operation_options.add_argument("--sync", action="store_true", help="Synchronize instead of backup/export only")
     operation_options.add_argument("--dry-run", action="store_true", help="Preview changes without backups, exports, or writes")
+    operation_options.add_argument(
+        "--check-automation",
+        type=Path,
+        help="Validate a private scheduler configuration without changing browser files",
+    )
+    operation_options.add_argument(
+        "--run-automation",
+        type=Path,
+        help="Run a private scheduler configuration and write a privacy-safe JSON result",
+    )
     parser.add_argument("--chrome-profile", type=Path)
     parser.add_argument("--edge-profile", type=Path)
     parser.add_argument("--backup-dir", type=Path, default=default_backup_dir())
@@ -1179,6 +1603,8 @@ def main(argv: list[str] | None = None) -> int:
             args.write_task_script,
             args.dry_run,
             args.sync,
+            args.check_automation,
+            args.run_automation,
         )
     )
     if args.gui or not has_cli_operation:
@@ -1186,6 +1612,38 @@ def main(argv: list[str] | None = None) -> int:
         App(root)
         root.mainloop()
         return 0
+
+    automation_path = args.check_automation or args.run_automation
+    if automation_path:
+        if args.force or args.close_browsers:
+            document = {
+                "schema_version": AUTOMATION_SCHEMA_VERSION,
+                "kind": "automation-result" if args.run_automation else "automation-readiness",
+                "status": "failed" if args.run_automation else "not-ready",
+                "exit_code": 1,
+                "error": "Automation process behavior must be defined only in the private configuration.",
+            }
+            print(json.dumps(document, indent=2))
+            return 1
+        try:
+            config = load_automation_config(automation_path)
+            if args.check_automation:
+                document = automation_readiness(config)
+                print(json.dumps(document, indent=2))
+                return 0 if document["status"] == "ready" else 1
+            exit_code, document = run_automation(config)
+            print(json.dumps(document, indent=2))
+            return exit_code
+        except (OSError, RuntimeError) as exc:
+            document = {
+                "schema_version": AUTOMATION_SCHEMA_VERSION,
+                "kind": "automation-result" if args.run_automation else "automation-readiness",
+                "status": "failed" if args.run_automation else "not-ready",
+                "exit_code": 1,
+                "error": safe_automation_error(exc),
+            }
+            print(json.dumps(document, indent=2))
+            return 1
 
     try:
         if args.profile_map:

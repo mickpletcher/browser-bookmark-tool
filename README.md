@@ -8,14 +8,15 @@ The synchronization uses a conservative union. A bookmark found in either browse
 
 Version: 0.2.0
 
-Release readiness: Needs CI fix
+Release readiness: Needs CI verification
 
-The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, and Task Scheduler generation are implemented. Windows CI is configured but currently has a Ruff version-drift lint failure recorded in the assessment. Safari backup and synchronization on macOS is planned as a future upgrade and is not currently implemented.
+The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, and vendor-neutral local AI scheduling contract are implemented for Windows. The Ruff version-drift fix passes locally and requires a new Windows CI run after commit. Native macOS Chrome and Edge compatibility and later Safari support are tracked as separate future upgrades and are not currently implemented.
 
 - [Current assessment](assessment.md)
 - [Changelog](changelog.md)
 - [Future upgrades](future-upgrades.md)
 - [Completed upgrades](completed-upgrades.md)
+- [Scheduled AI execution](SCHEDULING.md)
 
 ## Features
 
@@ -45,6 +46,7 @@ The GUI, CLI, standalone build, automated tests, transactional writes, dry-run r
 - Generates PowerShell scripts for Windows Task Scheduler with backup-only defaults.
 - Builds a standalone Windows executable with PyInstaller.
 - Runs tests and produces the executable through SHA-pinned Windows GitHub Actions.
+- Provides scheduler-safe configuration, readiness checks, concurrency locking, and privacy-safe JSON results for local Codex, Claude, Copilot, or deterministic schedulers.
 - Supports a Tkinter desktop interface and command-line execution.
 - Includes a Windows batch launcher that installs the project in editable mode and starts the app.
 
@@ -281,6 +283,30 @@ py .\browser_bookmark_sync.py `
 
 Review the generated script before running it. Add `--task-sync` only when unattended synchronization is intended and browser-process behavior has been tested.
 
+### Schedule through Codex, Claude, or Copilot
+
+AI schedulers use the same local PowerShell entrypoint and private JSON configuration. The scheduling model does not directly parse or modify bookmark files.
+
+Copy `automation-config.example.json` outside the repository, update its private paths, and validate it:
+
+```powershell
+.\Invoke-BrowserBookmarkAutomation.ps1 `
+  -ConfigPath "D:\Private\browser-bookmark-automation.json" `
+  -Mode Check
+```
+
+Run the reviewed configuration manually before creating a recurring schedule:
+
+```powershell
+.\Invoke-BrowserBookmarkAutomation.ps1 `
+  -ConfigPath "D:\Private\browser-bookmark-automation.json" `
+  -Mode Run
+```
+
+The default example is backup-only. Scheduled synchronization requires `operation` set to `sync`. Running browsers either block synchronization after backups and HTML export or are force-closed only when `browser_behavior` is explicitly set to `close`. Scheduled execution has no `--force` equivalent.
+
+See [SCHEDULING.md](SCHEDULING.md) for the full private configuration schema, structured result format, concurrency behavior, security boundary, and copy-ready Codex, Claude, and Copilot prompts.
+
 ### Logging
 
 Every backup or synchronization writes a count-only `browser-bookmark-tool.log` in the backup directory. It records timestamps, actions, counts, strategy, and process names. It does not record bookmark names or URLs. Use `--log-file` to select another private path and `--verbose` for additional count-only reporting.
@@ -322,6 +348,8 @@ Backups and the HTML export are created before process termination. The command 
 | `--gui` | No | Opens the desktop interface. |
 | `--sync` | No | Writes the merged bookmarks to both browsers. Without it, the run only backs up and exports. |
 | `--dry-run` | No | Reports planned counts and folder changes without creating or changing files. |
+| `--check-automation` | AI or local scheduling | Validates a private automation configuration without creating backups or changing browser files. |
+| `--run-automation` | AI or local scheduling | Executes a private automation configuration under a concurrency lock and writes a privacy-safe JSON result. |
 | `--chrome-profile` | CLI operations | Path to a Chrome profile containing `Bookmarks`. |
 | `--edge-profile` | CLI operations | Path to an Edge profile containing `Bookmarks`. |
 | `--backup-dir` | No | Output directory. Defaults to `Documents\Browser Bookmark Backups`. |
@@ -365,7 +393,7 @@ Retention is ordered by the timestamp in each generated filename. It does not re
 
 ## Privacy and security
 
-Bookmark files, backups, and profile mappings can expose browsing history, internal URLs, access tokens embedded in URLs, usernames, and private filesystem paths. Store them outside the repository and do not attach real data to issues. The project `.gitignore` blocks standard Chromium bookmark files, generated backups, logs, restore snapshots, task scripts, and private profile mappings as a secondary safeguard. Only the sanitized mapping example belongs in Git.
+Bookmark files, backups, profile mappings, automation configurations, and private scheduler outputs can expose browsing history, internal URLs, access tokens embedded in URLs, usernames, and private filesystem paths. Store them outside the repository and do not attach real data to issues, prompts, pull requests, or cloud artifacts. The project `.gitignore` blocks standard Chromium bookmark files, generated backups, logs, restore snapshots, task scripts, private profile mappings, automation results, and lock files as a secondary safeguard. Only the sanitized mapping and automation examples belong in Git.
 
 Report security vulnerabilities privately through GitHub. See the [security policy](SECURITY.md) for the reporting process and evidence requirements.
 
@@ -394,6 +422,7 @@ Do not restore a Chrome backup into Edge or an Edge backup into Chrome unless yo
 - Duplicate removal and alphabetization are disabled by default.
 - Direct restore requires JSON recovery snapshots. HTML restore uses the browser's import function.
 - Task Scheduler support generates a reviewed PowerShell registration script. It does not silently register tasks.
+- Cloud-hosted AI agents cannot access browser profiles on the local Windows computer. Scheduled browser operations require a local scheduler or a tightly controlled self-hosted Windows runner using the same Windows account.
 - The standalone executable is Windows-only and is built as a console-capable application so CLI output remains available.
 - The standalone executable is not Authenticode-signed. Build it from source or use a trusted workflow artifact.
 
@@ -424,7 +453,7 @@ Build the standalone executable:
 
 The executable is written to `dist\BrowserBookmarkTool.exe`. The SHA-pinned Windows workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) is configured to install development dependencies, run tests, compile the Python files, check the CLI, build the executable, and upload it as a workflow artifact. Current live workflow status and any release blockers are recorded in [assessment.md](assessment.md).
 
-The current test suite contains 55 passing cases covering conservative and aggressive URL matching, five merge strategies, dry-run reporting, named multi-profile execution, restore safety, SHA-256 manifests, manifest path validation, privacy-safe logging, Python and standalone Task Scheduler generation, GUID handling, organization, retention, transactional writes, process controls, CLI behavior, and GUI errors.
+The current test suite contains 77 passing cases covering conservative and aggressive URL matching, five merge strategies, dry-run reporting, named multi-profile execution, restore safety, SHA-256 manifests, manifest path validation, privacy-safe logging, Python and standalone Task Scheduler generation, scheduler configuration, absolute-path enforcement, readiness, locking, structured results, process-override rejection, the PowerShell automation wrapper, failure artifact reporting, GUID handling, organization, retention, transactional writes, process controls, CLI behavior, and GUI errors.
 
 ## Documentation maintenance requirement
 
@@ -435,6 +464,7 @@ Every project change must include a review and update of:
 - [changelog.md](changelog.md) for a concise entry under `[Unreleased]`.
 - [future-upgrades.md](future-upgrades.md) when priorities, dependencies, or candidate upgrades change.
 - [completed-upgrades.md](completed-upgrades.md) when a tracked upgrade is implemented and verified.
+- [SCHEDULING.md](SCHEDULING.md) when scheduler configuration, prompts, security boundaries, or execution behavior changes.
 
 This requirement applies to code, tests, documentation, configuration, packaging, and workflow changes. Do not leave instructions or status statements that describe behavior the application no longer has.
 

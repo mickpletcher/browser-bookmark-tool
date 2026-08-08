@@ -11,10 +11,16 @@ authors = [{name = "Mick Pletcher"}]
 license = "MIT"
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pyinstaller>=6", "ruff>=0.12"]
+dev = ["pytest>=9,<10", "pyinstaller>=6.21,<7", "ruff>=0.16.2,<0.17"]
 
 [project.scripts]
 browser-bookmark-tool = "browser_bookmark_sync:main"
 
 [tool.setuptools]
 py-modules = ["browser_bookmark_sync"]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

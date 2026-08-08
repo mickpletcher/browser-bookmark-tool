@@ -96,6 +96,20 @@ Acceptance criteria:
 - Cross-browser duplicate matching follows the selected matching mode.
 - Firefox support can be disabled without changing Chrome and Edge behavior.
 
+### FUT-013: macOS Chrome and Edge compatibility
+
+Make the existing Chrome and Edge backup, preview, organization, restore, and synchronization workflow run natively on macOS before adding Safari support.
+
+Acceptance criteria:
+
+- Platform adapters isolate browser profile discovery, process detection, browser closure, scheduling, launchers, and packaging without changing verified Windows behavior.
+- Chrome and Microsoft Edge profiles are discovered from supported macOS locations, with explicit paths still available for nonstandard profiles.
+- Backup, dry-run, HTML export, restore, deduplication, alphabetization, and transactional synchronization pass on a physical Mac.
+- Browser-process safeguards detect Chrome and Edge on macOS, block writes by default, and test any explicit closure option without weakening rollback guarantees.
+- A portable `python3` or shell entrypoint and documented `launchd`, Codex, Claude, and Copilot scheduling paths replace Windows-only launcher assumptions on macOS.
+- macOS CI runs the automated suite and performs a native packaging smoke test, while physical Mac validation covers local browser files and permissions that CI cannot reproduce.
+- Safari remains outside this upgrade and is implemented separately under `FUT-011` after the shared macOS platform layer is stable.
+
 ### FUT-011: Safari backup and synchronization on macOS
 
 Add a separate macOS implementation for backing up, previewing, organizing, and synchronizing Safari bookmarks with supported Chromium browsers.
@@ -109,6 +123,18 @@ Acceptance criteria:
 - Automated writes require Safari to be closed, prepare and validate all replacements first, preserve recovery data, and provide rollback after a partial failure.
 - Safari support is implemented as a separate macOS adapter and does not weaken Windows Chrome and Edge behavior.
 - Tests cover supported macOS and Safari versions, malformed exports, duplicate handling, iCloud warnings, backup integrity, and failed writes.
+
+### FUT-012: Scheduled-run health and failure notifications
+
+Add privacy-safe health history and optional failure notifications for unattended local scheduler runs.
+
+Acceptance criteria:
+
+- Health records contain only operation status, mapping names, counts, duration, process names, and error categories.
+- Bookmark titles, URLs, browser profile paths, backup paths, configuration contents, and credentials are excluded.
+- Repeated identical failures are rate-limited so a persistent browser or configuration problem does not generate notification spam.
+- Notification delivery is optional and disabled by default.
+- Tests cover successful runs, blocked synchronization, stale locks, repeated failures, recovery, and notification redaction.
 
 ## Priority 3: Later
 

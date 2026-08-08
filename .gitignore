@@ -18,6 +18,10 @@ Edge_PreRestore_*.json
 browser-bookmark-tool.log
 profile-mappings*.json
 !profile-mappings.example.json
+automation-config*.json
+!automation-config.example.json
+browser-bookmark-automation-result*.json
+browser-bookmark-automation*.lock*
 register-bookmark-task*.ps1
 
 # C extensions
