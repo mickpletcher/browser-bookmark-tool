@@ -28,7 +28,7 @@ The project is a Windows application for previewing, backing up, exporting, rest
 | Browser process handling | Ready | Running browsers block synchronization after backups and export. CLI users can explicitly force-close both process trees with `--close-browsers` or bypass detection with `--force`. |
 | Repository security | Ready | Secret scanning, push protection, Dependabot, private vulnerability reporting, CodeQL, restricted SHA-pinned Actions, and protected `main` rules are enabled. Optional non-provider patterns and validity checks are unavailable. |
 | Documentation | Good | The README documents current behavior, safety requirements, GUI and CLI use, backup restoration, limitations, development checks, and links to project tracking files. |
-| Upgrade tracking | Good | Three priority tiers track proposed work, while a separate permanent ledger records completed upgrades and their verification evidence. |
+| Upgrade tracking | Good | Three priority tiers track proposed work, including phased Safari support on macOS, while a separate permanent ledger records completed upgrades and their verification evidence. |
 
 ## Strengths
 

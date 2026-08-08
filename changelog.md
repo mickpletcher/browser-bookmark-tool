@@ -8,9 +8,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
-- Added `future-upgrades.md` with three priority tiers, acceptance criteria, and ten proposed upgrades.
+- Added `future-upgrades.md` with three priority tiers, acceptance criteria, and eleven proposed upgrades.
 - Added `completed-upgrades.md` with promotion rules and the version 0.2.0 capability baseline.
 - Added deterministic Ruff configuration and version control to the Priority 1 upgrade backlog after live Windows CI exposed dependency drift.
+- Added phased Safari backup and synchronization on macOS to the Priority 2 backlog with bookmark-only scope, iCloud warnings, and transactional write requirements.
 
 ### Security
 

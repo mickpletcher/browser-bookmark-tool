@@ -96,6 +96,20 @@ Acceptance criteria:
 - Cross-browser duplicate matching follows the selected matching mode.
 - Firefox support can be disabled without changing Chrome and Edge behavior.
 
+### FUT-011: Safari backup and synchronization on macOS
+
+Add a separate macOS implementation for backing up, previewing, organizing, and synchronizing Safari bookmarks with supported Chromium browsers.
+
+Acceptance criteria:
+
+- The first delivery supports Safari bookmark backup, preview, merge, and portable HTML export without direct Safari writes.
+- Safari import and export use documented macOS and Safari mechanisms wherever possible.
+- The feature handles bookmarks only and never exports passwords, history, credit cards, extensions, Reading List data, or open tabs.
+- The tool detects or clearly warns about iCloud Safari synchronization before any write because changes may propagate to other Apple devices.
+- Automated writes require Safari to be closed, prepare and validate all replacements first, preserve recovery data, and provide rollback after a partial failure.
+- Safari support is implemented as a separate macOS adapter and does not weaken Windows Chrome and Edge behavior.
+- Tests cover supported macOS and Safari versions, malformed exports, duplicate handling, iCloud warnings, backup integrity, and failed writes.
+
 ## Priority 3: Later
 
 These upgrades add optional portability and stronger protection for stored data.

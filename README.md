@@ -8,9 +8,9 @@ The synchronization uses a conservative union. A bookmark found in either browse
 
 Version: 0.2.0
 
-Release readiness: Ready
+Release readiness: Needs CI fix
 
-The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, and Windows CI are implemented.
+The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, and Task Scheduler generation are implemented. Windows CI is configured but currently has a Ruff version-drift lint failure recorded in the assessment. Safari backup and synchronization on macOS is planned as a future upgrade and is not currently implemented.
 
 - [Current assessment](assessment.md)
 - [Changelog](changelog.md)
