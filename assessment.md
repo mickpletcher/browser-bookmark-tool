@@ -1,12 +1,12 @@
 # Browser Bookmark Tool Assessment
 
 Last reviewed: 2026-08-08
-Project version: 0.2.0
-Release readiness: Ready for the next source release
+Project version: 0.3.0
+Release readiness: Source ready; trusted signing credential required for binary release
 
 ## Summary
 
-The project is a Windows application for previewing, backing up, exporting, restoring, and organizing Chrome bookmarks and Microsoft Edge favorites. Version 0.2.0 provides transactional write and browser-process protections. The unreleased scheduler update adds a vendor-neutral local execution contract, capped privacy-safe health history, and optional rate-limited failure notifications for Codex, Claude, Copilot, Windows Task Scheduler, and other trusted local schedulers.
+The project is a Windows application for previewing, backing up, exporting, restoring, and organizing Chrome bookmarks and Microsoft Edge favorites. Version 0.3.0 combines transactional write and browser-process protections with a vendor-neutral local execution contract, capped privacy-safe health history, optional rate-limited failure notifications, and fail-closed signed release automation. A trusted Authenticode credential is still required before the first binary release can be published.
 
 ## Current status
 
@@ -23,10 +23,10 @@ The project is a Windows application for previewing, backing up, exporting, rest
 | Multi-profile support | Ready | Private named mapping files separate work and personal profile pairs; CLI runs one, several, or all mappings. |
 | Integrity and logging | Ready | Manifests validate SHA-256 and size before pruning. Default logs contain operation metadata and counts but no bookmark URLs. |
 | Scheduling | Ready | A common local PowerShell entrypoint provides private configuration, no-write readiness checks, atomic locks, privacy-safe JSON results, capped allowlisted health history, disabled-by-default failure notifications, and explicit backup, dry-run, or sync modes. |
-| Windows distribution | Ready with limitation | The latest two `main` Windows CI runs pass and produce a workflow artifact. The executable is not Authenticode-signed. |
+| Windows distribution | Blocked on Azure setup | CI builds pass. The release workflow now requires Azure Artifact Signing through OIDC, Authenticode and timestamp verification, checksums, a CycloneDX SBOM, and GitHub attestations. No signing account or federated identity is configured. |
 | Chromium GUID handling | Ready | Existing Chrome GUIDs are preserved, imported nodes receive new UUIDs, duplicate GUIDs are rejected, and repeated synchronization remains stable. |
 | Browser process handling | Ready | Running browsers block synchronization after backups and export. CLI users can explicitly force-close both process trees with `--close-browsers` or bypass detection with `--force`. |
-| Repository security | Ready | Secret scanning, push protection, Dependabot, private vulnerability reporting, CodeQL, restricted SHA-pinned Actions, and protected `main` rules are enabled. Optional non-provider patterns and validity checks are unavailable. |
+| Repository security | Ready | Secret scanning, push protection, Dependabot, private vulnerability reporting, CodeQL, restricted SHA-pinned Actions, and a solo-maintainer `main` ruleset are enabled. Optional non-provider patterns and validity checks are unavailable. |
 | Documentation | Ready | The README documents current behavior, safety requirements, GUI and CLI use, backup restoration, limitations, development checks, contribution rules, support scope, and security reporting. |
 | Upgrade tracking | Good | Three priority tiers track proposed work, including release provenance, separate macOS Chrome and Edge compatibility, and phased Safari support. The completed ledger records the verified Ruff policy upgrade. |
 
@@ -73,8 +73,8 @@ No open medium findings.
 
 ### Low
 
-- The standalone executable is not Authenticode-signed. Source builds and trusted workflow artifacts remain usable, but broad distribution should add signing and timestamping.
-- The repository has no version tags or GitHub Releases. Create the first release only after choosing the next version and completing the signed-package and checksum requirements.
+- The Azure Artifact Signing account, verified public-trust certificate profile, OIDC federated identity, signer role, environment values, and expected publisher subject are not configured. The workflow intentionally stops before publishing without them.
+- The repository has no version tags or GitHub Releases. Create `v0.3.0` only after Azure signing is configured and then verify the published signature, checksums, SBOM, and attestations.
 
 ## Verification snapshot
 
@@ -96,19 +96,20 @@ Verified on Windows 11 with Python 3.13.3 on 2026-08-08.
 - `Invoke-BrowserBookmarkAutomation.ps1`: PowerShell syntax, readiness, and backup execution passed.
 - `automation-config.example.json`: JSON parsing and schema loading passed.
 - Workflow, Dependabot, and issue-form YAML files parse successfully.
-- `pip-audit`: no known vulnerable project dependencies.
+- Release packaging validation: the unsigned local validation mode passed for version 0.3.0, including executable smoke test, CycloneDX validation, archive contents, and independent checksum verification. Trusted signing validation cannot run until a code-signing certificate is supplied.
+- `pip-audit`: no known vulnerabilities in the runtime or resolved release-tool dependency sets, including CycloneDX 7.3.1 and PyInstaller 6.21.0.
 - Bandit: no medium or high findings. Six low findings cover the intentional `subprocess` import and argument-list calls to Windows tools or the explicitly configured local notifier; none use `shell=True`.
 - Root Markdown relative-link validation: passed.
 
-GitHub repository settings were reviewed on 2026-08-08. The repository name, About description, topics, MIT license detection, and custom 1280 by 640 social preview match the current Windows GUI and CLI. The blank homepage is appropriate because the project has no separate site. Issues remain enabled, while unused Projects, Wiki, Discussions, and Pages features are disabled. Pull requests use squash merge only, merged branches are deleted automatically, and branch update suggestions are enabled. The default branch blocks force pushes and deletion, enforces linear history and resolved review conversations, and applies protection to administrators without requiring pull requests or status checks.
+GitHub repository settings were reviewed on 2026-08-08. The repository name, About description, topics, MIT license detection, and custom 1280 by 640 social preview match the current Windows GUI and CLI. The blank homepage is appropriate because the project has no separate site. Issues remain enabled, while unused Projects, Wiki, Discussions, and Pages features are disabled. Pull requests use squash merge only, merged branches are deleted automatically, and branch update suggestions are enabled. The active solo-maintainer ruleset targets the default branch, allows repository administrators to bypass in emergencies, blocks deletion and non-fast-forward pushes, requires a pull request with zero approvals, requires resolved review conversations, requires the Python 3.10 through 3.13 tests and Windows executable build, requires the branch to be current, and permits squash merge only. The prior classic branch protection was removed after the ruleset was verified active.
 
-Actions have read-only default workflow permissions, cannot approve pull requests, require full commit SHA pinning, and permit only GitHub-owned actions. Secret scanning, push protection, Dependabot alerts and security updates, private vulnerability reporting, and Python and Actions CodeQL default setup are enabled. Weekly Dependabot version updates for Python and GitHub Actions are configured in this change.
+Actions have read-only default workflow permissions, cannot approve pull requests, and require full commit SHA pinning. The allowlist permits GitHub-owned actions plus only the exact reviewed Azure Login 3.0.1 and Azure Artifact Signing 2.0.0 commit SHAs used by the release workflow. Secret scanning, push protection, Dependabot alerts and security updates, private vulnerability reporting, and Python and Actions CodeQL default setup are enabled. Weekly Dependabot version updates for Python and GitHub Actions are configured.
 
 - Python and Actions CodeQL default setup is configured and current runs pass with zero code-scanning alerts.
 - Dependabot and secret-scanning alert counts are both zero.
 - Non-provider secret patterns and secret validity checks remain unavailable for this account and are disabled.
-- Windows CI runs `31238970704` and `31239476514` passed on `main`. Audit pull request run `31240802924` also passed Python 3.10 through 3.13, dependency checks, and the gated Windows executable build with current full-SHA official action pins. CodeQL run `31240802041` passed both Python and Actions analysis on the same commit.
-- The repository has one protected branch, no rulesets, tags, releases, packages, deployments, environments, webhooks, deploy keys, repository secrets, or repository variables, and no collaborators other than the owner.
+- Windows CI runs `31238970704` and `31239476514` passed on `main`. Audit pull request run `31240802924` also passed Python 3.10 through 3.13, dependency checks, and the gated Windows executable build with current full-SHA official action pins. CodeQL run `31240802041` passed both Python and Actions analysis on the same commit. Audit PR #1 was marked ready and squash-merged as commit `27a8c8a5d1a23b7478342e540588eeccf2656fe9`.
+- The repository has one active ruleset and a `release` environment restricted to `v*` tags. It has no tags, releases, packages, deployments, webhooks, deploy keys, Azure signing secrets or variables, or collaborators other than the owner.
 - Repository and full-history scans found no provider credential patterns. GitHub secret scanning also reports zero open alerts.
 
 The documentation was reviewed against the current implementation and live GitHub configuration, including local AI scheduling, private configuration, structured results, health history, optional notification delivery, concurrency, repository security, Windows CI status, package metadata, community health files, and upgrade tracking on 2026-08-08.

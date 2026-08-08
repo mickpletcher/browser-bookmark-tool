@@ -231,6 +231,11 @@ tempCodeRunnerFile.py
 # PyPI configuration file
 .pypirc
 
+# Local release packages and signing material
+release/
+*.pfx
+*.p12
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
