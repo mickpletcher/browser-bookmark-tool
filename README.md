@@ -1,5 +1,8 @@
 # Browser Bookmark Tool
 
+[![Windows CI](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Browser Bookmark Tool is a Windows desktop and command-line application for backing up, exporting, and synchronizing bookmarks between Google Chrome and Microsoft Edge.
 
 The synchronization uses a conservative union. A bookmark found in either browser is retained. Deletions are not propagated.
@@ -8,15 +11,17 @@ The synchronization uses a conservative union. A bookmark found in either browse
 
 Version: 0.2.0
 
-Release readiness: Needs CI verification
+Release readiness: Ready for the next source release
 
-The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The Ruff version-drift fix passes locally and requires a new Windows CI run after commit. Native macOS Chrome and Edge compatibility and later Safari support are tracked as separate future upgrades and are not currently implemented.
+The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The current `main` branch passes Windows CI and CodeQL. The executable remains unsigned, so broad binary distribution should wait for the tracked signing and release-package work. Native macOS Chrome and Edge compatibility and later Safari support are separate future upgrades and are not currently implemented.
 
 - [Current assessment](assessment.md)
 - [Changelog](changelog.md)
 - [Future upgrades](future-upgrades.md)
 - [Completed upgrades](completed-upgrades.md)
 - [Scheduled AI execution](SCHEDULING.md)
+- [Contributing](CONTRIBUTING.md)
+- [Support](SUPPORT.md)
 
 ## Features
 
@@ -399,7 +404,7 @@ Bookmark files, backups, profile mappings, automation configurations, and privat
 
 Report security vulnerabilities privately through GitHub. See the [security policy](SECURITY.md) for the reporting process and evidence requirements.
 
-The GitHub repository keeps Issues enabled and disables unused Projects, Wiki, Discussions, and Pages features. Pull requests use squash merge only and merged branches are deleted automatically. The protected `main` branch blocks force pushes and deletion, enforces linear history and resolved review conversations, and applies the rules to administrators. GitHub Actions has read-only default permissions, requires full commit SHA pinning, and permits only GitHub-owned actions. Secret scanning, push protection, Dependabot security updates, private vulnerability reporting, and CodeQL default setup are enabled. Non-provider secret patterns and secret validity checks are unavailable for this account and remain disabled.
+The GitHub repository keeps Issues enabled and disables unused Projects, Wiki, Discussions, and Pages features. Pull requests use squash merge only and merged branches are deleted automatically. The protected `main` branch blocks force pushes and deletion, enforces linear history and resolved review conversations, and applies the rules to administrators. It does not currently require pull requests or status checks. GitHub Actions has read-only default permissions, requires full commit SHA pinning, and permits only GitHub-owned actions. Secret scanning, push protection, Dependabot alerts and security updates, weekly Dependabot version updates, private vulnerability reporting, and CodeQL default setup are enabled. Non-provider secret patterns and secret validity checks are unavailable for this account and remain disabled.
 
 ## Restore a backup
 
@@ -437,6 +442,7 @@ Run the test suite:
 ```powershell
 py -m pip install -e ".[dev]"
 py -m pytest -q
+py -m ruff check .
 ```
 
 Run a syntax check:
@@ -453,9 +459,13 @@ Build the standalone executable:
 .\build.ps1
 ```
 
-The executable is written to `dist\BrowserBookmarkTool.exe`. The SHA-pinned Windows workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) is configured to install development dependencies, run tests, compile the Python files, check the CLI, build the executable, and upload it as a workflow artifact. Current live workflow status and any release blockers are recorded in [assessment.md](assessment.md).
+The executable is written to `dist\BrowserBookmarkTool.exe`. The SHA-pinned Windows workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) tests Python 3.10 through 3.13, runs lint, compilation, CLI, and dependency checks, builds the executable after the test matrix passes, and retains the workflow artifact for 14 days. Current live workflow status and any release blockers are recorded in [assessment.md](assessment.md).
 
 The current test suite contains 80 passing cases covering conservative and aggressive URL matching, five merge strategies, dry-run reporting, named multi-profile execution, restore safety, SHA-256 manifests, manifest path validation, privacy-safe logging, Python and standalone Task Scheduler generation, scheduler configuration, absolute-path enforcement, readiness, active and stale locking, structured results, health history, failure rate limiting and recovery, notification redaction, process-override rejection, the PowerShell automation wrapper, failure artifact reporting, GUID handling, organization, retention, transactional writes, process controls, CLI behavior, and GUI errors.
+
+## Contributing and support
+
+Use [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, branch and tag conventions, test requirements, and pull request rules. Use [SUPPORT.md](SUPPORT.md) for usage help. Participation is governed by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 
 ## Documentation maintenance requirement
 

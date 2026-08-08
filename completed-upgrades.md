@@ -46,6 +46,13 @@ The following capabilities were already complete when the upgrade tracking files
 
 ## Completed after backlog tracking
 
+### FUT-010: Deterministic lint configuration
+
+- Completed: 2026-08-08
+- Release: Unreleased
+- Summary: Defines an explicit Ruff rule set and supported Ruff range, verifies the same policy locally and in Windows CI, and adds weekly grouped dependency updates for Python and GitHub Actions.
+- Verification: Ruff 0.16.2 passes locally. Windows CI runs `31238970704` and `31239476514` passed after the policy fix. The audit workflow adds Python 3.10 through 3.13 coverage and current SHA-pinned official actions.
+
 ### COMP-001: Scheduler-safe local AI execution contract
 
 - Completed: 2026-08-07

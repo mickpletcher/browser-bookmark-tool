@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a reproducible problem with the Windows application
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Remove bookmark URLs, titles, usernames, local paths, tokens, and backup contents before submitting. Report security vulnerabilities privately through the Security tab.
+  - type: checkboxes
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed private bookmark and profile data from this report.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+  - type: input
+    attributes:
+      label: Browser Bookmark Tool version
+      placeholder: 0.2.0 or commit SHA
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Windows and Python versions
+      placeholder: Windows 11 24H2, Python 3.13.3 or standalone executable
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Chrome and Edge versions
+      placeholder: Chrome 000, Edge 000
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Interface
+      options:
+        - Desktop GUI
+        - Command line
+        - Scheduled automation
+        - Standalone executable
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Reproduction steps
+      description: Use placeholders for paths and bookmark data.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Actual behavior and sanitized error text
+    validations:
+      required: true
