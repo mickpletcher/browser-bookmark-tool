@@ -36,6 +36,8 @@ Homepage = "https://github.com/mickpletcher/browser-bookmark-tool"
 Issues = "https://github.com/mickpletcher/browser-bookmark-tool/issues"
 Changelog = "https://github.com/mickpletcher/browser-bookmark-tool/blob/main/changelog.md"
 Security = "https://github.com/mickpletcher/browser-bookmark-tool/security/policy"
+Privacy = "https://github.com/mickpletcher/browser-bookmark-tool/blob/main/PRIVACY.md"
+"Code signing policy" = "https://github.com/mickpletcher/browser-bookmark-tool/blob/main/CODE_SIGNING_POLICY.md"
 
 [tool.setuptools]
 py-modules = ["browser_bookmark_sync"]

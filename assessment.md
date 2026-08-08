@@ -6,7 +6,7 @@ Release readiness: Source ready; trusted signing credential required for binary 
 
 ## Summary
 
-The project is a Windows application for previewing, backing up, exporting, restoring, and organizing Chrome bookmarks and Microsoft Edge favorites. Version 0.3.0 combines transactional write and browser-process protections with a vendor-neutral local execution contract, capped privacy-safe health history, optional rate-limited failure notifications, and fail-closed signed release automation. A trusted Authenticode credential is still required before the first binary release can be published.
+The project is a Windows application for previewing, backing up, exporting, restoring, and organizing Chrome bookmarks and Microsoft Edge favorites. Version 0.3.0 combines transactional write and browser-process protections with a vendor-neutral local execution contract, capped privacy-safe health history, optional rate-limited failure notifications, and fail-closed signed release automation. SignPath Foundation application readiness now includes a public code-signing policy, privacy policy, explicit solo-maintainer roles, manual approval requirements, and enforced Windows release metadata. A trusted provider and verified signing integration are still required before the first binary release can be published.
 
 ## Current status
 
@@ -23,12 +23,12 @@ The project is a Windows application for previewing, backing up, exporting, rest
 | Multi-profile support | Ready | Private named mapping files separate work and personal profile pairs; CLI runs one, several, or all mappings. |
 | Integrity and logging | Ready | Manifests validate SHA-256 and size before pruning. Default logs contain operation metadata and counts but no bookmark URLs. |
 | Scheduling | Ready | A common local PowerShell entrypoint provides private configuration, no-write readiness checks, atomic locks, privacy-safe JSON results, capped allowlisted health history, disabled-by-default failure notifications, and explicit backup, dry-run, or sync modes. |
-| Windows distribution | Blocked on Azure setup | CI builds pass. The release workflow now requires Azure Artifact Signing through OIDC, Authenticode and timestamp verification, checksums, a CycloneDX SBOM, and GitHub attestations. No signing account or federated identity is configured. |
+| Windows distribution | Blocked on signing-provider onboarding | CI builds pass. The project is applying to SignPath Foundation, and release executables now enforce the product metadata required for signing. The existing Azure workflow remains fail-closed and unchanged until SignPath approval and integration details are available. No signing provider is configured. |
 | Chromium GUID handling | Ready | Existing Chrome GUIDs are preserved, imported nodes receive new UUIDs, duplicate GUIDs are rejected, and repeated synchronization remains stable. |
 | Browser process handling | Ready | Running browsers block synchronization after backups and export. CLI users can explicitly force-close both process trees with `--close-browsers` or bypass detection with `--force`. |
 | Repository security | Ready | Secret scanning, push protection, Dependabot, private vulnerability reporting, CodeQL, restricted SHA-pinned Actions, and a solo-maintainer `main` ruleset are enabled. Optional non-provider patterns and validity checks are unavailable. |
-| Documentation | Ready | The README documents current behavior, safety requirements, GUI and CLI use, backup restoration, limitations, development checks, contribution rules, support scope, and security reporting. |
-| Upgrade tracking | Good | Three priority tiers track proposed work, including release provenance, separate macOS Chrome and Edge compatibility, and phased Safari support. The completed ledger records the verified Ruff policy upgrade. |
+| Documentation | Ready | The README documents current behavior, safety requirements, GUI and CLI use, installation and removal, backup restoration, limitations, download status, privacy, code-signing roles, development checks, contribution rules, support scope, and security reporting. |
+| Upgrade tracking | Good | Three priority tiers track proposed work, including SignPath integration, release provenance, separate macOS Chrome and Edge compatibility, and phased Safari support. The completed ledger records SignPath application-readiness controls separately from pending provider integration. |
 
 ## Strengths
 
@@ -50,6 +50,8 @@ The project is a Windows application for previewing, backing up, exporting, rest
 - Supports independent restore and private named multi-profile workflows.
 - Validates backup integrity and logs count-only operational data.
 - Generates backup-first Task Scheduler scripts and a standalone Windows executable.
+- Embeds and validates Windows product name, version, description, and original-filename metadata in release executables.
+- Publishes explicit code-signing roles, manual approval controls, local-data privacy boundaries, and pending-provider status without representing unsigned binaries as trusted releases.
 - Gives local AI schedulers a deterministic entrypoint without granting `--force`, repository mutation, or access to bookmark contents in structured results.
 - Blocks concurrent scheduled runs and atomically publishes count-only results without local profile or backup paths.
 - Records capped scheduled-run health using only operation status, mapping names, counts, duration, browser process names, and allowlisted error categories.
@@ -73,8 +75,9 @@ No open medium findings.
 
 ### Low
 
-- The Azure Artifact Signing account, verified public-trust certificate profile, OIDC federated identity, signer role, environment values, and expected publisher subject are not configured. The workflow intentionally stops before publishing without them.
-- The repository has no version tags or GitHub Releases. Create `v0.3.0` only after Azure signing is configured and then verify the published signature, checksums, SBOM, and attestations.
+- SignPath Foundation has not approved or configured the project. The repository must not add provider-specific signing integration or represent artifacts as SignPath-signed until onboarding details are supplied and reviewed.
+- The existing Azure Artifact Signing account, verified public-trust certificate profile, OIDC federated identity, signer role, environment values, and expected publisher subject are not configured. The workflow intentionally stops before publishing without them.
+- The repository has no version tags, GitHub Releases, downloads, stars, forks, or other project-specific adoption evidence. SignPath requires a project to be released in the form being signed and to have verifiable reputation, so application acceptance remains uncertain. Do not publish an unsigned executable solely to satisfy that condition.
 
 ## Verification snapshot
 
@@ -96,7 +99,7 @@ Verified on Windows 11 with Python 3.13.3 on 2026-08-08.
 - `Invoke-BrowserBookmarkAutomation.ps1`: PowerShell syntax, readiness, and backup execution passed.
 - `automation-config.example.json`: JSON parsing and schema loading passed.
 - Workflow, Dependabot, and issue-form YAML files parse successfully.
-- Release packaging validation: the unsigned local validation mode passed for version 0.3.0, including executable smoke test, CycloneDX validation, archive contents, and independent checksum verification. Trusted signing validation cannot run until a code-signing certificate is supplied.
+- Release packaging validation: the unsigned local validation mode passed for version 0.3.0, including enforced Windows product metadata, executable smoke test, CycloneDX validation, policy and privacy documents in the archive, archive contents, and independent checksum verification. Trusted signing validation cannot run until a code-signing certificate is supplied.
 - `pip-audit`: no known vulnerabilities in the runtime or resolved release-tool dependency sets, including CycloneDX 7.3.1 and PyInstaller 6.21.0.
 - Bandit: no medium or high findings. Six low findings cover the intentional `subprocess` import and argument-list calls to Windows tools or the explicitly configured local notifier; none use `shell=True`.
 - Root Markdown relative-link validation: passed.
@@ -112,7 +115,7 @@ Actions have read-only default workflow permissions, cannot approve pull request
 - The repository has one active ruleset and a `release` environment restricted to `v*` tags. It has no tags, releases, packages, deployments, webhooks, deploy keys, Azure signing secrets or variables, or collaborators other than the owner.
 - Repository and full-history scans found no provider credential patterns. GitHub secret scanning also reports zero open alerts.
 
-The documentation was reviewed against the current implementation and live GitHub configuration, including local AI scheduling, private configuration, structured results, health history, optional notification delivery, concurrency, repository security, Windows CI status, package metadata, community health files, and upgrade tracking on 2026-08-08.
+The documentation was reviewed against the current implementation and live GitHub configuration, including local AI scheduling, private configuration, structured results, health history, optional notification delivery, concurrency, repository security, Windows CI status, release metadata, SignPath application readiness, privacy, community health files, and upgrade tracking on 2026-08-08.
 
 ## Maintenance requirement
 

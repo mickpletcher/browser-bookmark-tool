@@ -51,3 +51,14 @@ Release tags use `vMAJOR.MINOR.PATCH`, such as `v0.3.0`.
 - Do not commit generated executables, build output, browser data, mappings, logs, results, health history, or scheduler files.
 
 Pull requests are squash merged. Write the title so it can serve as the final commit message.
+
+## Code signing roles
+
+The project roles, approval requirements, and release controls are defined in [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md).
+
+- Mick Pletcher is the project author, committer, reviewer, and signing approver.
+- External contributions require maintainer review before merge.
+- Every release signing request requires a separate manual approval after the source, tag, checks, build metadata, and artifact provenance are verified.
+- Pull requests from forks and other untrusted contexts must never receive signing credentials or permission to approve signing requests.
+
+This is a solo-maintained project. There is no independent second human reviewer for maintainer-authored changes. Required Windows CI, release-package validation, current-branch enforcement, and resolved review conversations remain mandatory controls.

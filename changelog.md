@@ -12,7 +12,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - Added an explicit unsigned local validation mode whose executable and archive names include `-unsigned` and which never publishes artifacts.
 - Added isolated release dependencies and SBOM path-leak checks so global packages and local editable-install paths cannot enter a published SBOM.
 - Added copy-ready Authenticode, checksum, and GitHub attestation verification instructions.
-- Added `future-upgrades.md` with three priority tiers, acceptance criteria, and thirteen proposed upgrades.
+- Added `future-upgrades.md` with three priority tiers, acceptance criteria, and fourteen proposed upgrades.
 - Added `completed-upgrades.md` with promotion rules and the version 0.2.0 capability baseline.
 - Added deterministic Ruff configuration and version control to the Priority 1 upgrade backlog after live Windows CI exposed dependency drift.
 - Added phased Safari backup and synchronization on macOS to the Priority 2 backlog with bookmark-only scope, iCloud warnings, and transactional write requirements.
@@ -32,9 +32,15 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - Added weekly grouped Dependabot version updates for Python and GitHub Actions.
 - Added package README, keywords, classifiers, and project links to `pyproject.toml`.
 - Added `FUT-015` release artifact provenance and SBOM work to replace the completed deterministic lint upgrade.
+- Added a SignPath-compatible code-signing policy with public source, explicit solo-maintainer roles, manual approval requirements, account-security controls, and a signing-incident response path.
+- Added a privacy policy covering local bookmark processing, generated files, optional user-configured notification delivery, retention, and deletion.
+- Added uninstall instructions for editable installs, portable executables, optional scheduled tasks, and separately retained user data.
+- Added `FUT-016` to track SignPath Foundation onboarding and verified signing-provider integration separately from application readiness.
 
 ### Security
 
+- Enforced Windows ProductName, ProductVersion, FileDescription, and OriginalFilename metadata in release builds and included the code-signing and privacy policies in release archives.
+- Documented that SignPath approval is pending, unsigned artifacts are not public releases, and provider-specific integration must not be added before configuration is reviewed.
 - Restricted release publication to the `release` environment and `v*` tags, kept private signing keys out of GitHub, and used short-lived OIDC authentication for managed hardware-backed signing.
 - Kept full-SHA Actions enforcement and expanded the allowlist only for the exact reviewed Azure Login 3.0.1 and Azure Artifact Signing 2.0.0 commits.
 - Replaced classic `main` protection with a solo-maintainer ruleset that permits administrator emergency bypass, blocks deletion and non-fast-forward pushes, requires current pull requests with resolved conversations and all five Windows CI checks, and allows squash merge only.
@@ -52,6 +58,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Changed
 
+- Corrected the README's stale branch-protection summary to match the active solo-maintainer ruleset and required Windows CI checks.
 - Added manifest retention and path-validation regression coverage.
 - Documented that standalone executable artifacts are not Authenticode-signed.
 - Required completed upgrades to leave the future backlog, enter the completed ledger with verification evidence, and be replaced by at least one new candidate.

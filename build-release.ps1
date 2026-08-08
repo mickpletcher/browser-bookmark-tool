@@ -56,6 +56,7 @@ $workPath = Join-Path $buildRoot 'work'
 $specPath = Join-Path $buildRoot 'spec'
 $distPath = Join-Path $buildRoot 'dist'
 $packageRoot = Join-Path $buildRoot 'package'
+$versionFilePath = Join-Path $buildRoot 'version-info.txt'
 $virtualEnvironment = Join-Path $buildRoot 'venv'
 $releasePython = Join-Path $virtualEnvironment 'Scripts\python.exe'
 $createdOutput = $Mode -ne 'Finalize'
@@ -81,11 +82,48 @@ try {
             throw "Release dependency installation failed with exit code $LASTEXITCODE."
         }
 
+        $versionParts = @($Version.Split('.') | ForEach-Object { [int]$_ }) + 0
+        $versionTuple = "($($versionParts[0]), $($versionParts[1]), $($versionParts[2]), $($versionParts[3]))"
+        $versionInfo = @"
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=$versionTuple,
+    prodvers=$versionTuple,
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '040904B0',
+        [
+          StringStruct('CompanyName', 'Mick Pletcher'),
+          StringStruct('FileDescription', 'Browser Bookmark Tool'),
+          StringStruct('FileVersion', '$Version'),
+          StringStruct('InternalName', 'BrowserBookmarkTool'),
+          StringStruct('LegalCopyright', 'Copyright (c) 2026 Mick Pletcher'),
+          StringStruct('OriginalFilename', 'BrowserBookmarkTool.exe'),
+          StringStruct('ProductName', 'Browser Bookmark Tool'),
+          StringStruct('ProductVersion', '$Version')
+        ]
+      )
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
+"@
+        Set-Content -LiteralPath $versionFilePath -Value $versionInfo -Encoding utf8NoBOM
+
         & $releasePython -m PyInstaller `
             --noconfirm `
             --clean `
             --onefile `
             --name BrowserBookmarkTool `
+            --version-file $versionFilePath `
             --workpath $workPath `
             --specpath $specPath `
             --distpath $distPath `
@@ -98,6 +136,19 @@ try {
         $unsignedStatus = (Get-AuthenticodeSignature -LiteralPath $executablePath).Status
         if ($unsignedStatus -ne 'NotSigned') {
             throw "Prepared executable had unexpected Authenticode status: $unsignedStatus"
+        }
+
+        $versionMetadata = (Get-Item -LiteralPath $executablePath).VersionInfo
+        $expectedMetadata = [ordered]@{
+            FileDescription = 'Browser Bookmark Tool'
+            OriginalFilename = 'BrowserBookmarkTool.exe'
+            ProductName = 'Browser Bookmark Tool'
+            ProductVersion = $Version
+        }
+        foreach ($entry in $expectedMetadata.GetEnumerator()) {
+            if ($versionMetadata.($entry.Key) -ne $entry.Value) {
+                throw "Prepared executable metadata $($entry.Key) was '$($versionMetadata.($entry.Key))'; expected '$($entry.Value)'."
+            }
         }
 
         & $releasePython -m cyclonedx_py environment `
@@ -156,6 +207,8 @@ try {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination $packageRoot
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LICENSE') -Destination $packageRoot
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'SECURITY.md') -Destination $packageRoot
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'PRIVACY.md') -Destination $packageRoot
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'CODE_SIGNING_POLICY.md') -Destination $packageRoot
 
     $archiveName = "browser-bookmark-tool-$Version-windows-x64$nameSuffix.zip"
     $archivePath = Join-Path $resolvedOutput $archiveName
