@@ -1,8 +1,8 @@
 # Browser Bookmark Tool Assessment
 
-Last reviewed: 2026-08-07
+Last reviewed: 2026-08-08
 Project version: 0.2.0
-Release readiness: Needs CI verification
+Release readiness: Ready for the next source release
 
 ## Summary
 
@@ -23,12 +23,12 @@ The project is a Windows application for previewing, backing up, exporting, rest
 | Multi-profile support | Ready | Private named mapping files separate work and personal profile pairs; CLI runs one, several, or all mappings. |
 | Integrity and logging | Ready | Manifests validate SHA-256 and size before pruning. Default logs contain operation metadata and counts but no bookmark URLs. |
 | Scheduling | Ready | A common local PowerShell entrypoint provides private configuration, no-write readiness checks, atomic locks, privacy-safe JSON results, capped allowlisted health history, disabled-by-default failure notifications, and explicit backup, dry-run, or sync modes. |
-| Windows distribution | Needs verification | Local tests and explicit Ruff 0.16.2 rules pass. A new Windows CI run is required after commit before the remote artifact is release-ready. |
+| Windows distribution | Ready with limitation | The latest two `main` Windows CI runs pass and produce a workflow artifact. The executable is not Authenticode-signed. |
 | Chromium GUID handling | Ready | Existing Chrome GUIDs are preserved, imported nodes receive new UUIDs, duplicate GUIDs are rejected, and repeated synchronization remains stable. |
 | Browser process handling | Ready | Running browsers block synchronization after backups and export. CLI users can explicitly force-close both process trees with `--close-browsers` or bypass detection with `--force`. |
 | Repository security | Ready | Secret scanning, push protection, Dependabot, private vulnerability reporting, CodeQL, restricted SHA-pinned Actions, and protected `main` rules are enabled. Optional non-provider patterns and validity checks are unavailable. |
-| Documentation | Good | The README documents current behavior, safety requirements, GUI and CLI use, backup restoration, limitations, development checks, and links to project tracking files. |
-| Upgrade tracking | Good | Three priority tiers track proposed work, including separate macOS Chrome and Edge compatibility and phased Safari support, while a permanent ledger records completed upgrades and their verification evidence. |
+| Documentation | Ready | The README documents current behavior, safety requirements, GUI and CLI use, backup restoration, limitations, development checks, contribution rules, support scope, and security reporting. |
+| Upgrade tracking | Good | Three priority tiers track proposed work, including release provenance, separate macOS Chrome and Edge compatibility, and phased Safari support. The completed ledger records the verified Ruff policy upgrade. |
 
 ## Strengths
 
@@ -69,22 +69,25 @@ No open high findings.
 
 ### Medium
 
-- The Ruff drift fix is implemented locally with an explicit rule set and the supported `ruff>=0.16.2,<0.17` range. The latest remote Windows CI runs predate this fix and remain failed. Commit and push the change, then confirm a complete Windows CI run before treating the workflow artifact as release-ready or moving `FUT-010` to completed upgrades.
+No open medium findings.
 
 ### Low
 
 - The standalone executable is not Authenticode-signed. Source builds and trusted workflow artifacts remain usable, but broad distribution should add signing and timestamping.
+- The repository has no version tags or GitHub Releases. Create the first release only after choosing the next version and completing the signed-package and checksum requirements.
 
 ## Verification snapshot
 
-Verified on Windows 11 with Python 3.13.3 on 2026-08-07.
+Verified on Windows 11 with Python 3.13.3 on 2026-08-08.
 
 - `py -m pip install -e .`: passed.
 - `py -m browser_bookmark_sync --help`: passed.
 - `Run Browser Bookmark Tool.bat --help`: passed and reached the application through the Python module.
 - `py -m pytest -q`: passed with 80 cases, including private automation configuration, absolute-path enforcement, readiness, active and stale locks, stale-lock health recovery, backup, dry-run, blocked and browser-closing sync, health allowlisting, repeated-failure suppression, recovery reset, notification redaction, process-override rejection, failure artifact reporting, privacy-safe results, CLI routing, and PowerShell wrapper execution.
+- Python 3.11.9 isolated environment: all 80 tests, Ruff, compilation, and `pip check` passed.
 - `py -m ruff check .`: passed with Ruff 0.16.2 and an explicit project rule set.
 - `py -m py_compile browser_bookmark_sync.py test_sync.py`: passed.
+- Package wheel build: passed. The wheel contains only the application module, project metadata, console entry point, and MIT license.
 - Standalone PyInstaller build: passed. The generated `BrowserBookmarkTool.exe --help` smoke test passed.
 - Hidden Tkinter construction: passed with duplicate removal and alphabetization disabled by default.
 - Live Windows `tasklist` detection: passed and identified the currently running `chrome.exe` and `msedge.exe` processes.
@@ -92,17 +95,23 @@ Verified on Windows 11 with Python 3.13.3 on 2026-08-07.
 - `dist\BrowserBookmarkTool.exe --help`: passed as a standalone CLI smoke test.
 - `Invoke-BrowserBookmarkAutomation.ps1`: PowerShell syntax, readiness, and backup execution passed.
 - `automation-config.example.json`: JSON parsing and schema loading passed.
+- Workflow, Dependabot, and issue-form YAML files parse successfully.
+- `pip-audit`: no known vulnerable project dependencies.
+- Bandit: no medium or high findings. Six low findings cover the intentional `subprocess` import and argument-list calls to Windows tools or the explicitly configured local notifier; none use `shell=True`.
+- Root Markdown relative-link validation: passed.
 
-GitHub repository settings were reviewed and updated on 2026-08-07. The About description and topics match the current Windows GUI and CLI. Issues remain enabled, while unused Projects, Wiki, Discussions, and Pages features are disabled. Pull requests use squash merge only, merged branches are deleted automatically, and branch update suggestions are enabled. The default branch blocks force pushes and deletion, enforces linear history and resolved review conversations, and applies protection to administrators without requiring pull requests or status checks.
+GitHub repository settings were reviewed on 2026-08-08. The repository name, About description, topics, MIT license detection, and custom 1280 by 640 social preview match the current Windows GUI and CLI. The blank homepage is appropriate because the project has no separate site. Issues remain enabled, while unused Projects, Wiki, Discussions, and Pages features are disabled. Pull requests use squash merge only, merged branches are deleted automatically, and branch update suggestions are enabled. The default branch blocks force pushes and deletion, enforces linear history and resolved review conversations, and applies protection to administrators without requiring pull requests or status checks.
 
-Actions have read-only default workflow permissions, require full commit SHA pinning, and permit only GitHub-owned actions. Secret scanning, push protection, Dependabot security updates, private vulnerability reporting, and Python and Actions CodeQL default setup are enabled.
+Actions have read-only default workflow permissions, cannot approve pull requests, require full commit SHA pinning, and permit only GitHub-owned actions. Secret scanning, push protection, Dependabot alerts and security updates, private vulnerability reporting, and Python and Actions CodeQL default setup are enabled. Weekly Dependabot version updates for Python and GitHub Actions are configured in this change.
 
-- The first Python CodeQL default-setup run passed with zero code-scanning alerts.
+- Python and Actions CodeQL default setup is configured and current runs pass with zero code-scanning alerts.
 - Dependabot and secret-scanning alert counts are both zero.
 - Non-provider secret patterns and secret validity checks remain unavailable for this account and are disabled.
-- The Windows CI workflow uses verified official action SHAs, read-only contents permission, non-persisted checkout credentials, and a 20-minute job timeout. Its two current runs failed at lint before the explicit Ruff configuration was added; the replacement configuration passes locally and awaits a new remote run.
+- Windows CI runs `31238970704` and `31239476514` passed on `main`. The audit branch updates all official actions to their current releases, retains full SHA pinning, tests Python 3.10 through 3.13, checks installed dependencies, and builds only after the test matrix passes.
+- The repository has one protected branch, no rulesets, tags, releases, packages, deployments, environments, webhooks, deploy keys, repository secrets, or repository variables, and no collaborators other than the owner.
+- Repository and full-history scans found no provider credential patterns. GitHub secret scanning also reports zero open alerts.
 
-The documentation was reviewed against the current implementation and live GitHub configuration, including local AI scheduling, private configuration, structured results, health history, optional notification delivery, concurrency, repository security, Windows CI status, and upgrade tracking on 2026-08-07.
+The documentation was reviewed against the current implementation and live GitHub configuration, including local AI scheduling, private configuration, structured results, health history, optional notification delivery, concurrency, repository security, Windows CI status, package metadata, community health files, and upgrade tracking on 2026-08-08.
 
 ## Maintenance requirement
 

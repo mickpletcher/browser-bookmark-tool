@@ -24,6 +24,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - Added optional local failure notification commands with sanitized JSON standard input, disabled-by-default configuration, consecutive-failure suppression, and recovery reset.
 - Added successful-run, blocked synchronization, stale-lock recovery, repeated-failure, recovery, and notification-redaction regression coverage.
 - Added `FUT-014` notification delivery verification and provider templates to the Priority 2 backlog as the replacement candidate for completed `FUT-012`.
+- Added contribution, support, conduct, ownership, issue, and pull request guidance for public repository participation.
+- Added weekly grouped Dependabot version updates for Python and GitHub Actions.
+- Added package README, keywords, classifiers, and project links to `pyproject.toml`.
+- Added `FUT-015` release artifact provenance and SBOM work to replace the completed deterministic lint upgrade.
 
 ### Security
 
@@ -36,6 +40,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - Excluded private automation configurations, results, and lock files from Git.
 - Excluded private scheduler health histories from Git and kept notification commands and credentials out of health and notification payloads.
 - Restricted scheduled structured output to counts, mapping names, operation status, process names, and privacy-safe errors without bookmark URLs or local paths.
+- Updated the Windows workflow to current verified official action SHAs while retaining repository-enforced SHA pinning and read-only permissions.
+- Added privacy warnings and private vulnerability routing to the public issue workflow.
 
 ### Changed
 
@@ -49,6 +55,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - Recorded the live Windows CI Ruff 0.16.2 lint failure as a release-readiness finding; tests pass before the failing lint step.
 - Defined explicit Ruff rules and a supported `ruff>=0.16.2,<0.17` range so local and Windows CI lint behavior does not drift silently.
 - Updated the maintained test suite to 80 passing cases.
+- Replaced duplicate branch and pull request CI runs with `main` push and pull request triggers, cancellation of superseded runs, a Python 3.10 through 3.13 test matrix, dependency checks, and a gated Windows build artifact.
+- Updated stale release-readiness documentation after two successful Windows CI runs and moved `FUT-010` to completed upgrades.
+- Added workflow and license badges plus contribution and support links to the README.
 
 ## [0.2.0] - 2026-08-07
 

@@ -48,16 +48,16 @@ Acceptance criteria:
 - Package contents exclude browser data, local mappings, logs, and generated task scripts.
 - Release instructions document checksum verification in PowerShell.
 
-### FUT-010: Deterministic lint configuration
+### FUT-015: Release artifact provenance and SBOM
 
-Define stable Ruff rules and a tested version range so local development and Windows CI evaluate the same code with the same policy.
+Publish verifiable provenance and a software bill of materials with each versioned release package.
 
 Acceptance criteria:
 
-- `pyproject.toml` explicitly defines the enabled Ruff rule set.
-- Development dependencies prevent unreviewed Ruff behavior changes from breaking CI.
-- The current source and tests pass locally and on Windows CI with the selected configuration.
-- Dependency update guidance includes a lint-policy review before the allowed Ruff range changes.
+- The release workflow generates an SPDX or CycloneDX SBOM from the packaged application and its build dependencies.
+- GitHub artifact attestations cover the executable, archive, checksum file, and SBOM.
+- Verification instructions include copy-ready PowerShell commands.
+- Provenance generation uses least-privilege workflow permissions and no long-lived repository credentials.
 
 ## Priority 2: Planned
 

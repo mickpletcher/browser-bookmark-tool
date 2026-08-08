@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose a focused improvement to the tool
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check future-upgrades.md before filing. Do not include private bookmark data, profile paths, or credentials.
+  - type: textarea
+    attributes:
+      label: Problem
+      description: Describe the problem this would solve.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful change.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Safety impact
+      description: Explain any effect on backups, synchronization, deletion behavior, browser processes, or private data.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Alternatives
+      description: List any workaround or alternative design already considered.
