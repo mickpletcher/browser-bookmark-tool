@@ -73,3 +73,10 @@ The following capabilities were already complete when the upgrade tracking files
 - Release: Unreleased
 - Summary: Adds a public code-signing policy, privacy policy, explicit solo-maintainer signing roles, manual approval requirements, honest download and provider status, and enforced Windows product metadata. Provider onboarding and workflow integration remain tracked separately under `FUT-016`.
 - Verification: The unsigned release-package validation confirms ProductName, ProductVersion, FileDescription, and OriginalFilename metadata; includes both policy documents in the release archive; and retains executable smoke testing, CycloneDX validation, checksum verification, and fail-closed signing publication.
+
+### FUT-002: Automated restore verification
+
+- Completed: 2026-08-08
+- Release: Unreleased
+- Summary: Adds GUI and CLI verification that copies a selected JSON recovery snapshot into an isolated temporary Chromium profile, validates required roots and bookmark-node structure, rejects malformed or duplicate GUIDs, verifies the matching SHA-256 manifest, and returns a count-only no-write report.
+- Verification: The 88-case suite covers valid snapshots, corrupt JSON, invalid Chromium structure, duplicate GUIDs, automatic and explicit manifest mismatches, live-profile preservation, and concise GUI and CLI reports. Ruff and Python compilation pass.

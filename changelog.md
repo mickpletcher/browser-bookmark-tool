@@ -8,6 +8,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
+- Added non-destructive JSON recovery verification through the GUI and CLI using an isolated temporary Chromium profile, schema validation, GUID validation, matching manifest checks, and count-only reports.
+- Added regression coverage for valid snapshots, corrupt JSON, invalid Chromium structure, duplicate GUIDs, manifest mismatches, live-file preservation, and GUI and CLI verification results.
+- Added `FUT-017` backup-set catalog and comparison as the replacement candidate for completed `FUT-002`.
 - Added a fail-closed versioned Windows release workflow that requires Azure Artifact Signing through OIDC, timestamp and publisher verification, SHA-256 checksums, a CycloneDX SBOM, and GitHub provenance before publishing a Release.
 - Added an explicit unsigned local validation mode whose executable and archive names include `-unsigned` and which never publishes artifacts.
 - Added isolated release dependencies and SBOM path-leak checks so global packages and local editable-install paths cannot enter a published SBOM.

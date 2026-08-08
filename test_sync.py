@@ -33,6 +33,7 @@ from browser_bookmark_sync import (
     synchronize,
     validate_backup_manifest,
     validate_unique_guids,
+    verify_json_backup,
     write_task_scheduler_script,
 )
 
@@ -800,6 +801,123 @@ def test_manifest_validates_and_detects_tampering(tmp_path: Path):
     )
     with pytest.raises(RuntimeError, match="invalid file entry"):
         validate_backup_manifest(result.manifest_path)
+
+
+def verification_files(tmp_path: Path, document: dict | str) -> tuple[Path, Path]:
+    stamp = "2026-08-08_12-00-00_000001"
+    backup = tmp_path / f"Chrome_{stamp}.json"
+    backup.write_text(document if isinstance(document, str) else json.dumps(document))
+    manifest = tmp_path / f"Manifest_{stamp}.json"
+    sync_module.write_backup_manifest(manifest, [backup])
+    return backup, manifest
+
+
+def test_verify_json_backup_is_non_destructive_and_reports_counts(tmp_path: Path):
+    backup, manifest = verification_files(tmp_path, data("https://verified.test"))
+    live_profile = tmp_path / "Live" / "Default"
+    live_profile.mkdir(parents=True)
+    live_file = live_profile / "Bookmarks"
+    live_content = json.dumps(data("https://live.test"))
+    live_file.write_text(live_content)
+
+    report = verify_json_backup(backup)
+
+    assert report.backup_path == backup
+    assert report.manifest_path == manifest
+    assert report.bookmark_count == 1
+    assert report.folder_count == 2
+    assert live_file.read_text() == live_content
+    assert "No live browser files were changed" in report.render()
+
+
+def test_verify_json_backup_rejects_invalid_json(tmp_path: Path):
+    backup, _ = verification_files(tmp_path, "{invalid")
+
+    with pytest.raises(RuntimeError, match="not valid JSON"):
+        verify_json_backup(backup)
+
+
+def test_verify_json_backup_rejects_invalid_chromium_schema(tmp_path: Path):
+    backup, _ = verification_files(
+        tmp_path,
+        {"roots": {"bookmark_bar": {"type": "folder", "id": "1", "name": "Bookmarks bar", "children": []}}},
+    )
+
+    with pytest.raises(RuntimeError, match="missing required Chromium root"):
+        verify_json_backup(backup)
+
+
+def test_verify_json_backup_rejects_duplicate_guids(tmp_path: Path):
+    document = data("https://one.test", "https://two.test")
+    for child in document["roots"]["bookmark_bar"]["children"]:
+        child["guid"] = "11111111-1111-4111-8111-111111111111"
+    backup, _ = verification_files(tmp_path, document)
+
+    with pytest.raises(RuntimeError, match="duplicate GUID values"):
+        verify_json_backup(backup)
+
+
+def test_verify_json_backup_rejects_manifest_mismatch(tmp_path: Path):
+    backup, _ = verification_files(tmp_path, data("https://original.test"))
+    backup.write_text(json.dumps(data("https://changed.test")))
+
+    with pytest.raises(RuntimeError, match="integrity validation failed"):
+        verify_json_backup(backup)
+
+
+def test_verify_json_backup_checks_selected_file_against_explicit_manifest(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest-set"
+    manifest_dir.mkdir()
+    original, manifest = verification_files(manifest_dir, data("https://original.test"))
+    selected_dir = tmp_path / "selected"
+    selected_dir.mkdir()
+    selected = selected_dir / original.name
+    selected.write_text(json.dumps(data("https://different.test")))
+
+    with pytest.raises(RuntimeError, match="integrity validation failed"):
+        verify_json_backup(selected, manifest)
+
+
+def test_cli_verify_backup_prints_concise_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    backup, manifest = verification_files(tmp_path, data("https://verified.test"))
+
+    exit_code = main(["--verify-backup", str(backup)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.err == ""
+    assert "Backup verification passed" in captured.out
+    assert "Bookmarks: 1" in captured.out
+    assert "Folders: 2" in captured.out
+    assert "No live browser files were changed" in captured.out
+
+    assert main(["--verify-manifest", str(manifest)]) == 1
+    assert "--verify-manifest requires --verify-backup" in capsys.readouterr().err
+
+
+def test_gui_verify_backup_shows_concise_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    class Value:
+        def __init__(self, value: str):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value: str):
+            self.value = value
+
+    backup, _ = verification_files(tmp_path, data("https://verified.test"))
+    app = object.__new__(App)
+    app.backups = Value(str(tmp_path))
+    app.status = Value("")
+    messages: list[tuple[str, str]] = []
+    monkeypatch.setattr(sync_module.filedialog, "askopenfilename", lambda **_kwargs: str(backup))
+    monkeypatch.setattr(sync_module.messagebox, "showinfo", lambda title, message: messages.append((title, message)))
+
+    App._verify_backup(app)
+
+    assert app.status.get() == "Verified 1 bookmarks and 2 folders. No live browser files were changed."
+    assert messages == [(f"{sync_module.APP_NAME} Verification", sync_module.verify_json_backup(backup).render())]
 
 
 def test_operation_log_does_not_include_bookmark_urls(tmp_path: Path):

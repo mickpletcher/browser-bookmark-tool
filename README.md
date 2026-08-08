@@ -13,7 +13,7 @@ Version: 0.3.0
 
 Release readiness: Source ready; trusted signing credential required for binary release
 
-The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The current `main` branch passes Windows CI and CodeQL. Release automation fails closed unless a trusted provider signs and timestamps the executable, the workflow verifies the expected publisher and signature, and checksums, a CycloneDX SBOM, and GitHub provenance are published. The project is applying to the SignPath Foundation open-source program; the existing Azure-based workflow remains unchanged until SignPath approves the project and provides the required integration settings. No signing provider is currently configured, so broad binary distribution remains blocked. Native macOS Chrome and Edge compatibility and later Safari support are separate future upgrades and are not currently implemented.
+The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, non-destructive backup verification, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The current `main` branch passes Windows CI and CodeQL. Release automation fails closed unless a trusted provider signs and timestamps the executable, the workflow verifies the expected publisher and signature, and checksums, a CycloneDX SBOM, and GitHub provenance are published. The project is applying to the SignPath Foundation open-source program; the existing Azure-based workflow remains unchanged until SignPath approves the project and provides the required integration settings. No signing provider is currently configured, so broad binary distribution remains blocked. Native macOS Chrome and Edge compatibility and later Safari support are separate future upgrades and are not currently implemented.
 
 - [Current assessment](assessment.md)
 - [Changelog](changelog.md)
@@ -46,6 +46,7 @@ The GUI, CLI, standalone build, automated tests, transactional writes, dry-run r
 - Validates that the merged bookmark collection contains no duplicate GUID values.
 - Uses conservative URL matching by default and keeps aggressive matching opt-in.
 - Provides five merge strategies and a no-write dry-run report.
+- Verifies JSON recovery snapshots in a temporary Chromium profile without changing live browser files.
 - Restores Chrome or Edge independently from raw JSON recovery snapshots.
 - Saves and loads private named profile mappings and processes several mappings from the CLI.
 - Creates and validates SHA-256 backup manifests.
@@ -226,8 +227,9 @@ Every signing request must be manually approved after its source, tag, required 
    - **Preview Changes** displays counts, direction differences, duplicate removals, folder additions, reorder counts, and final totals without creating or changing files.
    - **Back Up + Export HTML** creates raw browser backups and a merged HTML export without changing either browser.
    - **Back Up + Sync** creates backups and the HTML export, then writes the merged bookmarks to both browsers.
-   - **Open Backup Folder** opens the configured backup directory.
-   - **Restore Chrome** or **Restore Edge** restores that browser independently from a selected raw JSON recovery snapshot after preserving its current file.
+    - **Open Backup Folder** opens the configured backup directory.
+    - **Verify Backup** checks Chromium structure, GUID uniqueness, and the matching SHA-256 manifest without changing either browser.
+    - **Restore Chrome** or **Restore Edge** restores that browser independently from a selected raw JSON recovery snapshot after preserving its current file.
    - **Save Profile Mapping** and **Load Profile Mapping** manage named browser-profile pairs in a private JSON file.
 
 The app automatically selects the first detected profile for each browser. Review both selections before running an action.
@@ -321,6 +323,17 @@ py .\browser_bookmark_sync.py `
 ```
 
 Repeat `--mapping` to run several named mappings. Omit `--mapping` to process every mapping in the file. Each mapping has its own Chrome profile, Edge profile, and backup directory, which reduces the risk of mixing work and personal profiles.
+
+### Verify a JSON recovery snapshot
+
+Verify a generated snapshot before attempting a restore:
+
+```powershell
+py .\browser_bookmark_sync.py `
+  --verify-backup "D:\Browser Bookmark Backups\Chrome_2026-08-08_12-00-00_000001.json"
+```
+
+The tool copies the snapshot into an isolated temporary Chromium profile, validates its root and node structure, rejects malformed or duplicate GUIDs, and verifies every file in the matching `Manifest_*` file. It reports bookmark and folder counts, removes the temporary profile, and never reads or writes a live browser profile. Use `--verify-manifest` only when supplying the matching manifest path explicitly.
 
 ### Restore a JSON recovery snapshot
 
@@ -422,6 +435,8 @@ Backups and the HTML export are created before process termination. The command 
 | `--dry-run` | No | Reports planned counts and folder changes without creating or changing files. |
 | `--check-automation` | AI or local scheduling | Validates a private automation configuration without creating backups or changing browser files. |
 | `--run-automation` | AI or local scheduling | Executes a private automation configuration under a concurrency lock and writes a privacy-safe JSON result. |
+| `--verify-backup` | Backup verification | Raw JSON recovery snapshot to validate without changing browser files. |
+| `--verify-manifest` | No | Explicit matching manifest path for `--verify-backup`. |
 | `--chrome-profile` | CLI operations | Path to a Chrome profile containing `Bookmarks`. |
 | `--edge-profile` | CLI operations | Path to an Edge profile containing `Bookmarks`. |
 | `--backup-dir` | No | Output directory. Defaults to `Documents\Browser Bookmark Backups`. |
@@ -457,7 +472,7 @@ Manifest_YYYY-MM-DD_HH-MM-SS_microseconds.json
 browser-bookmark-tool.log
 ```
 
-The HTML file is the portable bookmark backup. It contains the merged collection and can be imported into browsers that support Netscape bookmark HTML. The Chrome and Edge JSON files are retained as recovery snapshots because HTML does not preserve all Chromium bookmark metadata. The manifest records file names, sizes, SHA-256 hashes, and count-only operation data. The tool validates the manifest before retention pruning.
+The HTML file is the portable bookmark backup. It contains the merged collection and can be imported into browsers that support Netscape bookmark HTML. The Chrome and Edge JSON files are retained as recovery snapshots because HTML does not preserve all Chromium bookmark metadata. The manifest records file names, sizes, SHA-256 hashes, and count-only operation data. The tool validates the manifest before retention pruning and can independently verify a selected recovery snapshot against its matching manifest before restore.
 
 Retention is applied separately to Chrome JSON recovery snapshots, Edge JSON recovery snapshots, merged HTML backups, and manifests. The tool accepts 1 through 50 backup sets and defaults to 50. Microsecond timestamps prevent repeated runs during the same second from overwriting earlier files. The append-only operation log and pre-restore recovery files are not pruned automatically.
 
@@ -552,7 +567,7 @@ The repository Actions allowlist still requires full commit SHA pinning. It perm
 
 The project is applying for SignPath Foundation service as a no-cost alternative. Do not add SignPath credentials, actions, or signing steps until the application is approved and SignPath supplies the project configuration. If accepted, replace the Azure-specific signing step in a reviewed pull request while preserving tag validation, manual signing approval, version-metadata enforcement, signature and timestamp checks, checksums, SBOM generation, provenance, and fail-closed publication. Update the repository Actions allowlist only for exact reviewed and full-SHA-pinned dependencies required by that integration.
 
-The current test suite contains 80 passing cases covering conservative and aggressive URL matching, five merge strategies, dry-run reporting, named multi-profile execution, restore safety, SHA-256 manifests, manifest path validation, privacy-safe logging, Python and standalone Task Scheduler generation, scheduler configuration, absolute-path enforcement, readiness, active and stale locking, structured results, health history, failure rate limiting and recovery, notification redaction, process-override rejection, the PowerShell automation wrapper, failure artifact reporting, GUID handling, organization, retention, transactional writes, process controls, CLI behavior, and GUI errors.
+The current test suite contains 88 passing cases covering conservative and aggressive URL matching, five merge strategies, dry-run reporting, named multi-profile execution, non-destructive backup verification, restore safety, Chromium schema checks, duplicate GUID rejection, SHA-256 manifests, manifest mismatch and path validation, privacy-safe logging, Python and standalone Task Scheduler generation, scheduler configuration, absolute-path enforcement, readiness, active and stale locking, structured results, health history, failure rate limiting and recovery, notification redaction, process-override rejection, the PowerShell automation wrapper, failure artifact reporting, organization, retention, transactional writes, process controls, CLI behavior, and GUI errors.
 
 ## Contributing and support
 
