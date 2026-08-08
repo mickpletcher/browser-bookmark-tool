@@ -13,7 +13,7 @@ Version: 0.3.0
 
 Release readiness: Source ready; trusted signing credential required for binary release
 
-The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The current `main` branch passes Windows CI and CodeQL. Release automation now fails closed unless Azure Artifact Signing can sign and timestamp the executable, the workflow can verify the expected publisher and signature, and checksums, a CycloneDX SBOM, and GitHub provenance are published. No Azure signing account is currently configured, so broad binary distribution remains blocked. Native macOS Chrome and Edge compatibility and later Safari support are separate future upgrades and are not currently implemented.
+The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The current `main` branch passes Windows CI and CodeQL. Release automation fails closed unless a trusted provider signs and timestamps the executable, the workflow verifies the expected publisher and signature, and checksums, a CycloneDX SBOM, and GitHub provenance are published. The project is applying to the SignPath Foundation open-source program; the existing Azure-based workflow remains unchanged until SignPath approves the project and provides the required integration settings. No signing provider is currently configured, so broad binary distribution remains blocked. Native macOS Chrome and Edge compatibility and later Safari support are separate future upgrades and are not currently implemented.
 
 - [Current assessment](assessment.md)
 - [Changelog](changelog.md)
@@ -22,6 +22,8 @@ The GUI, CLI, standalone build, automated tests, transactional writes, dry-run r
 - [Scheduled AI execution](SCHEDULING.md)
 - [Contributing](CONTRIBUTING.md)
 - [Support](SUPPORT.md)
+- [Privacy policy](PRIVACY.md)
+- [Code signing policy](CODE_SIGNING_POLICY.md)
 
 ## Features
 
@@ -52,6 +54,7 @@ The GUI, CLI, standalone build, automated tests, transactional writes, dry-run r
 - Builds a standalone Windows executable with PyInstaller.
 - Runs tests and produces the executable through SHA-pinned Windows GitHub Actions.
 - Validates versioned Windows release packages and requires Authenticode signing, checksums, a CycloneDX SBOM, and GitHub attestations before publication.
+- Embeds and validates Windows product name, version, description, and original-filename metadata in release executables.
 - Provides scheduler-safe configuration, readiness checks, concurrency locking, and privacy-safe JSON results for local Codex, Claude, Copilot, or deterministic schedulers.
 - Supports a Tkinter desktop interface and command-line execution.
 - Includes a Windows batch launcher that installs the project in editable mode and starts the app.
@@ -120,6 +123,14 @@ Confirm Python is available:
 py --version
 ```
 
+## Downloads
+
+Source code is available from this repository. [Download the current `main` source as a ZIP](https://github.com/mickpletcher/browser-bookmark-tool/archive/refs/heads/main.zip), or use a versioned source archive after [tags](https://github.com/mickpletcher/browser-bookmark-tool/tags) are published. Trusted Windows binaries will be published on [GitHub Releases](https://github.com/mickpletcher/browser-bookmark-tool/releases) only after the signing workflow is configured and the executable passes signature, timestamp, checksum, SBOM, and provenance validation.
+
+There is no trusted Windows binary release yet. Do not treat temporary GitHub Actions build artifacts or locally generated `-unsigned` packages as public releases.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). The application is pending acceptance into that program. See the [Code signing policy](CODE_SIGNING_POLICY.md) for current status, team roles, approval controls, and privacy requirements.
+
 ## Install the application
 
 Install the project in editable mode from PowerShell:
@@ -129,6 +140,22 @@ py -m pip install -e .
 ```
 
 The installation provides the `browser-bookmark-tool` console command. Some Python installations do not add their `Scripts` directory to `PATH`. The documented `py -m browser_bookmark_sync` commands and the batch launcher work without that PATH entry.
+
+## Uninstall the application
+
+Remove an editable Python installation from PowerShell:
+
+```powershell
+py -m pip uninstall browser-bookmark-tool
+```
+
+A standalone executable is portable and does not register an uninstaller. Delete the downloaded `BrowserBookmarkTool-*.exe`, its extracted release folder, and any shortcut you created.
+
+Uninstalling does not delete browser bookmarks, user-selected backups, exports, mappings, automation configuration, logs, results, or health history. Delete those files separately only after confirming they are no longer needed. If you registered a generated Windows scheduled task, remove that task separately by its reviewed task name:
+
+```powershell
+Unregister-ScheduledTask -TaskName "Browser Bookmark Backup" -Confirm
+```
 
 ## Verify a Windows release
 
@@ -160,6 +187,12 @@ gh attestation verify .\BrowserBookmarkTool-0.3.0.exe `
 ```
 
 Each release also includes the versioned ZIP, `SHA256SUMS`, and a CycloneDX JSON SBOM. The release workflow publishes the files only after signature and checksum verification succeeds.
+
+## Code signing policy
+
+The complete [Code signing policy](CODE_SIGNING_POLICY.md) identifies the public source repository, maintainer roles, signing approver, manual approval requirement, executable metadata restrictions, verification controls, and response process. This is a solo-maintained project, and that policy explicitly discloses that an independent second reviewer is not currently available.
+
+Every signing request must be manually approved after its source, tag, required checks, Windows metadata, Authenticode signature, timestamp, checksums, SBOM, and provenance are verified. No executable may be described as SignPath-signed before the SignPath Foundation application is approved and the integration is verified.
 
 ## Run the desktop app
 
@@ -436,7 +469,9 @@ Bookmark files, backups, profile mappings, automation configurations, and privat
 
 Report security vulnerabilities privately through GitHub. See the [security policy](SECURITY.md) for the reporting process and evidence requirements.
 
-The GitHub repository keeps Issues enabled and disables unused Projects, Wiki, Discussions, and Pages features. Pull requests use squash merge only and merged branches are deleted automatically. The protected `main` branch blocks force pushes and deletion, enforces linear history and resolved review conversations, and applies the rules to administrators. It does not currently require pull requests or status checks. GitHub Actions has read-only default permissions, requires full commit SHA pinning, and permits only GitHub-owned actions. Secret scanning, push protection, Dependabot alerts and security updates, weekly Dependabot version updates, private vulnerability reporting, and CodeQL default setup are enabled. Non-provider secret patterns and secret validity checks are unavailable for this account and remain disabled.
+The application has no telemetry, analytics, advertising, automatic update checks, cloud synchronization, or built-in bookmark upload. See [PRIVACY.md](PRIVACY.md) for local data handling, optional user-configured notification delivery, retention, and deletion details.
+
+The GitHub repository keeps Issues enabled and disables unused Projects, Wiki, Discussions, and Pages features. Pull requests use squash merge only and merged branches are deleted automatically. The protected `main` branch blocks force pushes and deletion, enforces linear history and resolved review conversations, requires a current pull request and all five Windows CI checks, and permits administrator emergency bypass. GitHub Actions has read-only default permissions, requires full commit SHA pinning, and permits GitHub-owned actions plus the exact reviewed Azure actions used by the current fail-closed release workflow. Secret scanning, push protection, Dependabot alerts and security updates, weekly Dependabot version updates, private vulnerability reporting, and CodeQL default setup are enabled. Non-provider secret patterns and secret validity checks are unavailable for this account and remain disabled.
 
 ## Restore a backup
 
@@ -515,11 +550,13 @@ The workflow requires the tag version to match `pyproject.toml` and the tagged c
 
 The repository Actions allowlist still requires full commit SHA pinning. It permits GitHub-owned actions plus only the exact reviewed Azure Login 3.0.1 and Azure Artifact Signing 2.0.0 commits used by the release workflow.
 
+The project is applying for SignPath Foundation service as a no-cost alternative. Do not add SignPath credentials, actions, or signing steps until the application is approved and SignPath supplies the project configuration. If accepted, replace the Azure-specific signing step in a reviewed pull request while preserving tag validation, manual signing approval, version-metadata enforcement, signature and timestamp checks, checksums, SBOM generation, provenance, and fail-closed publication. Update the repository Actions allowlist only for exact reviewed and full-SHA-pinned dependencies required by that integration.
+
 The current test suite contains 80 passing cases covering conservative and aggressive URL matching, five merge strategies, dry-run reporting, named multi-profile execution, restore safety, SHA-256 manifests, manifest path validation, privacy-safe logging, Python and standalone Task Scheduler generation, scheduler configuration, absolute-path enforcement, readiness, active and stale locking, structured results, health history, failure rate limiting and recovery, notification redaction, process-override rejection, the PowerShell automation wrapper, failure artifact reporting, GUID handling, organization, retention, transactional writes, process controls, CLI behavior, and GUI errors.
 
 ## Contributing and support
 
-Use [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, branch and tag conventions, test requirements, and pull request rules. Use [SUPPORT.md](SUPPORT.md) for usage help. Participation is governed by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
+Use [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, branch and tag conventions, test requirements, pull request rules, and signing roles. Use [SUPPORT.md](SUPPORT.md) for usage help. Participation is governed by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Report vulnerabilities privately through [SECURITY.md](SECURITY.md). Data handling is documented in [PRIVACY.md](PRIVACY.md), and release-signing controls are documented in [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md).
 
 ## Documentation maintenance requirement
 

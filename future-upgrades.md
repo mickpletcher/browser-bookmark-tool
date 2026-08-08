@@ -19,7 +19,7 @@ These upgrades address distribution trust, recovery confidence, and release inte
 
 Sign the standalone Windows executable through CI using protected credentials and a trusted timestamp service.
 
-Implementation status: The fail-closed Azure Artifact Signing and verification workflow is implemented. Completion is blocked until a signing account, verified public-trust certificate profile, OIDC identity, signer role, and environment values are configured and a release executable verifies as `Valid`.
+Implementation status: The fail-closed Azure Artifact Signing and verification workflow is implemented, and SignPath application-readiness controls are documented. Completion is blocked until a trusted provider is configured and a release executable verifies as `Valid`.
 
 Acceptance criteria:
 
@@ -64,6 +64,21 @@ Acceptance criteria:
 - GitHub artifact attestations cover the executable, archive, checksum file, and SBOM.
 - Verification instructions include copy-ready PowerShell commands.
 - Provenance generation uses least-privilege workflow permissions and no long-lived repository credentials.
+
+### FUT-016: SignPath Foundation onboarding and integration
+
+Complete SignPath Foundation review and, if approved, replace the unconfigured Azure signing step with the exact provider-supported GitHub Actions integration.
+
+Implementation status: Application prerequisites are documented. The repository publishes the required code-signing acknowledgment, maintainer roles, manual approval policy, privacy statement, honest download status, and enforced Windows product metadata. Provider approval and configuration are pending.
+
+Acceptance criteria:
+
+- SignPath Foundation approves the project and confirms the repository, artifact configuration, and signing workflow.
+- Every signing request requires manual approval in SignPath by the documented approver.
+- The integration signs only artifacts built from this public repository and never exposes signing authority to untrusted pull requests.
+- All third-party actions are reviewed, pinned to full commit SHAs, and added to the repository allowlist only when required.
+- The final workflow verifies the SignPath Foundation publisher, trusted timestamp, Windows product metadata, checksums, SBOM, and provenance before publication.
+- The first signed release is independently verified and the download page identifies the signing provider and links to the code-signing policy.
 
 ## Priority 2: Planned
 

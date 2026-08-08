@@ -10,6 +10,8 @@ on:
       - "README.md"
       - "LICENSE"
       - "SECURITY.md"
+      - "PRIVACY.md"
+      - "CODE_SIGNING_POLICY.md"
   push:
     tags:
       - "v*"

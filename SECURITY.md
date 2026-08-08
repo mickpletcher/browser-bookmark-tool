@@ -15,3 +15,5 @@ Include the affected version, impact, reproduction steps, and any proposed mitig
 Chrome and Edge `Bookmarks` files, JSON and HTML backups, restore snapshots, generated task scripts, and profile mapping files can contain private browsing data, internal URLs, access tokens, usernames, or local paths. Keep them outside the repository. The project `.gitignore` blocks standard private filenames as a secondary safeguard.
 
 Backup manifests contain file names, sizes, hashes, and count-only summaries. Default logs contain timestamps, actions, counts, selected strategy, and browser process names. They intentionally exclude bookmark names and URLs. Treat all generated operational files as private unless independently reviewed and sanitized.
+
+See [PRIVACY.md](PRIVACY.md) for the complete local data-handling policy. Suspected misuse of the release-signing process or a project signature should be reported privately and handled under [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md).

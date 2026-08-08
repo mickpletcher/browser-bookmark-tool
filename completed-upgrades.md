@@ -66,3 +66,10 @@ The following capabilities were already complete when the upgrade tracking files
 - Release: Unreleased
 - Summary: Adds capped allowlisted health history for every scheduler run and optional local failure delivery through a configured command. Notifications are disabled by default, contain only the sanitized health record, suppress consecutive matching failures, and reset after a successful run or different failure.
 - Verification: The 80-case suite covers successful health records, blocked synchronization, stale-lock recovery counts, repeated-failure suppression, recovery reset, disabled defaults, and redaction of bookmark titles, URLs, browser and backup paths, configuration values, and credentials. Ruff, Python compilation, and diff checks pass.
+
+### COMP-002: SignPath Foundation application readiness
+
+- Completed: 2026-08-08
+- Release: Unreleased
+- Summary: Adds a public code-signing policy, privacy policy, explicit solo-maintainer signing roles, manual approval requirements, honest download and provider status, and enforced Windows product metadata. Provider onboarding and workflow integration remain tracked separately under `FUT-016`.
+- Verification: The unsigned release-package validation confirms ProductName, ProductVersion, FileDescription, and OriginalFilename metadata; includes both policy documents in the release archive; and retains executable smoke testing, CycloneDX validation, checksum verification, and fail-closed signing publication.
