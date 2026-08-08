@@ -6,6 +6,11 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ## [Unreleased]
 
+### Added
+
+- Added `future-upgrades.md` with three priority tiers, acceptance criteria, and nine proposed upgrades.
+- Added `completed-upgrades.md` with promotion rules and the version 0.2.0 capability baseline.
+
 ### Security
 
 - Rejected manifest entries containing traversal paths, invalid sizes, or malformed SHA-256 values.
@@ -16,6 +21,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 - Added manifest retention and path-validation regression coverage.
 - Documented that standalone executable artifacts are not Authenticode-signed.
+- Required completed upgrades to leave the future backlog, enter the completed ledger with verification evidence, and be replaced by at least one new candidate.
+- Linked both upgrade tracking files from the README and synchronized the assessment maintenance rules.
 
 ## [0.2.0] - 2026-08-07
 

@@ -28,6 +28,7 @@ The project is a Windows application for previewing, backing up, exporting, rest
 | Browser process handling | Ready | Running browsers block synchronization after backups and export. CLI users can explicitly force-close both process trees with `--close-browsers` or bypass detection with `--force`. |
 | Repository security | Ready | Secret scanning and push protection, Dependabot alerts and security updates, private vulnerability reporting, Python CodeQL default setup, SHA-pinned Actions enforcement, and `main` force-push and deletion protection are enabled. |
 | Documentation | Good | The README documents current behavior, safety requirements, GUI and CLI use, backup restoration, limitations, development checks, and links to project tracking files. |
+| Upgrade tracking | Good | Three priority tiers track proposed work, while a separate permanent ledger records completed upgrades and their verification evidence. |
 
 ## Strengths
 
@@ -93,8 +94,10 @@ GitHub repository settings were reviewed on 2026-08-07. The default branch block
 - Non-provider secret patterns and secret validity checks remain unavailable for this repository and are disabled.
 - The Windows CI workflow uses verified official action SHAs, read-only contents permission, non-persisted checkout credentials, and a 20-minute job timeout.
 
-The documentation was reviewed against the current 0.2.0 implementation, including URL matching, merge strategies, dry-run reporting, mappings, restore, manifests, logging, scheduling, standalone build support, and Windows CI on 2026-08-07.
+The documentation was reviewed against the current 0.2.0 implementation, including URL matching, merge strategies, dry-run reporting, mappings, restore, manifests, logging, scheduling, standalone build support, Windows CI, and upgrade tracking on 2026-08-07.
 
 ## Maintenance requirement
 
 Review and update this file with every project change. Update the review date, status table, findings, and verification results affected by the change. Remove resolved findings instead of leaving stale issues. Update `README.md` and record the same change in `changelog.md`.
+
+When a tracked upgrade is implemented, remove it from `future-upgrades.md`, record it with verification evidence in `completed-upgrades.md`, and add at least one new candidate to the future backlog.

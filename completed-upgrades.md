@@ -1,0 +1,46 @@
+# Completed Upgrades
+
+This file records implemented and verified project upgrades. Completed entries are permanent history and must not remain in [future-upgrades.md](future-upgrades.md).
+
+## Completion rules
+
+When an upgrade is completed:
+
+1. Remove its entry from `future-upgrades.md`.
+2. Add it here with the original ID and title, completion date, release version, implementation summary, and verification evidence.
+3. Add at least one new upgrade option to `future-upgrades.md` and assign a priority tier.
+4. Update `README.md`, `assessment.md`, and `changelog.md` in the same change set.
+5. Confirm no completed ID or title remains in the future backlog.
+
+## Baseline completed before backlog tracking
+
+The following capabilities were already complete when the upgrade tracking files were introduced on 2026-08-07. They establish the project baseline and were not promoted from the future backlog.
+
+### BASE-001: Transactional Chrome and Edge synchronization
+
+- Completed: 2026-08-07
+- Release: 0.2.0
+- Summary: Prepares and validates both replacement files, blocks unsafe live-browser writes, and restores Chrome automatically if the Edge replacement fails.
+- Verification: Transaction, first-write failure, second-write failure, process detection, forced synchronization, and browser-closing tests pass.
+
+### BASE-002: Backup, export, integrity, and recovery
+
+- Completed: 2026-08-07
+- Release: 0.2.0
+- Summary: Retains up to 50 raw JSON recovery backups and portable HTML backups, creates SHA-256 manifests, and supports independent Chrome or Edge JSON restore.
+- Verification: Backup retention, rapid backup creation, manifest validation, restore safety, and HTML export tests pass.
+
+### BASE-003: Optional organization and merge controls
+
+- Completed: 2026-08-07
+- Release: 0.2.0
+- Summary: Adds optional duplicate removal, alphabetization, conservative or aggressive URL matching, five merge strategies, and no-write previews.
+- Verification: Matching, organization, strategy, and dry-run tests pass with safe options disabled by default.
+
+### BASE-004: Profiles, automation, packaging, and CI
+
+- Completed: 2026-08-07
+- Release: 0.2.0
+- Summary: Adds named multi-profile mappings, privacy-safe logs, Task Scheduler script generation, a standalone Windows build, and SHA-pinned Windows CI.
+- Verification: Mapping, logging, task generation, GUI, CLI, batch launcher, PyInstaller, and workflow checks pass.
+

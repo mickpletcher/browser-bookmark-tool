@@ -14,6 +14,8 @@ The GUI, CLI, standalone build, automated tests, transactional writes, dry-run r
 
 - [Current assessment](assessment.md)
 - [Changelog](changelog.md)
+- [Future upgrades](future-upgrades.md)
+- [Completed upgrades](completed-upgrades.md)
 
 ## Features
 
@@ -429,5 +431,9 @@ Every project change must include a review and update of:
 - [README.md](README.md) for installation, operation, behavior, limitations, or development guidance affected by the change.
 - [assessment.md](assessment.md) for current status, open findings, release readiness, and verification results.
 - [changelog.md](changelog.md) for a concise entry under `[Unreleased]`.
+- [future-upgrades.md](future-upgrades.md) when priorities, dependencies, or candidate upgrades change.
+- [completed-upgrades.md](completed-upgrades.md) when a tracked upgrade is implemented and verified.
 
 This requirement applies to code, tests, documentation, configuration, packaging, and workflow changes. Do not leave instructions or status statements that describe behavior the application no longer has.
+
+When an upgrade is completed, remove it from `future-upgrades.md`, add it to `completed-upgrades.md` with its completion evidence, and add at least one new candidate to the future backlog. A completed upgrade must never appear in both files.
