@@ -13,4 +13,4 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-browser-bookmark-tool --gui
+py -m browser_bookmark_sync %*

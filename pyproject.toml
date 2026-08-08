@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,11 +8,10 @@ version = "0.1.0"
 description = "Back up and safely synchronize Chrome and Edge bookmarks"
 requires-python = ">=3.10"
 authors = [{name = "Mick Pletcher"}]
-license = {text = "MIT"}
+license = "MIT"
 
 [project.scripts]
 browser-bookmark-tool = "browser_bookmark_sync:main"
 
 [tool.setuptools]
 py-modules = ["browser_bookmark_sync"]
-package-dir = {"" = "src"}
