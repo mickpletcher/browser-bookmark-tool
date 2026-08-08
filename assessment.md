@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-08-07
 Project version: 0.2.0
-Release readiness: Ready
+Release readiness: Needs CI fix
 
 ## Summary
 
@@ -23,10 +23,10 @@ The project is a Windows application for previewing, backing up, exporting, rest
 | Multi-profile support | Ready | Private named mapping files separate work and personal profile pairs; CLI runs one, several, or all mappings. |
 | Integrity and logging | Ready | Manifests validate SHA-256 and size before pruning. Default logs contain operation metadata and counts but no bookmark URLs. |
 | Scheduling | Ready | The tool generates reviewable PowerShell task-registration scripts with backup-only defaults and explicit sync opt-in. |
-| Windows distribution | Ready | PyInstaller build support and SHA-pinned Windows CI produce a standalone executable artifact. |
+| Windows distribution | Needs attention | The local PyInstaller build passes, but Windows CI currently stops at lint because its unbounded Ruff dependency installs 0.16.2 while the verified local environment uses 0.15.12. |
 | Chromium GUID handling | Ready | Existing Chrome GUIDs are preserved, imported nodes receive new UUIDs, duplicate GUIDs are rejected, and repeated synchronization remains stable. |
 | Browser process handling | Ready | Running browsers block synchronization after backups and export. CLI users can explicitly force-close both process trees with `--close-browsers` or bypass detection with `--force`. |
-| Repository security | Ready | Secret scanning and push protection, Dependabot alerts and security updates, private vulnerability reporting, Python CodeQL default setup, SHA-pinned Actions enforcement, and `main` force-push and deletion protection are enabled. |
+| Repository security | Ready | Secret scanning, push protection, Dependabot, private vulnerability reporting, CodeQL, restricted SHA-pinned Actions, and protected `main` rules are enabled. Optional non-provider patterns and validity checks are unavailable. |
 | Documentation | Good | The README documents current behavior, safety requirements, GUI and CLI use, backup restoration, limitations, development checks, and links to project tracking files. |
 | Upgrade tracking | Good | Three priority tiers track proposed work, while a separate permanent ledger records completed upgrades and their verification evidence. |
 
@@ -65,7 +65,7 @@ No open high findings.
 
 ### Medium
 
-No open medium findings.
+- Windows CI installs Ruff 0.16.2 through the unbounded `ruff>=0.12` development dependency. Ruff 0.16.2 reports 18 lint findings that Ruff 0.15.12 does not report under the same command, so the workflow stops before compile, CLI, build, and artifact upload. Define an explicit lint rule set and supported Ruff version range, then rerun CI before treating the workflow artifact as release-ready.
 
 ### Low
 
@@ -87,14 +87,16 @@ Verified on Windows 11 with Python 3.13.3 on 2026-08-07.
 - `build.ps1`: produced `dist\BrowserBookmarkTool.exe` with PyInstaller 6.21.0.
 - `dist\BrowserBookmarkTool.exe --help`: passed as a standalone CLI smoke test.
 
-GitHub repository settings were reviewed on 2026-08-07. The default branch blocks force pushes and deletion without requiring pull requests or status checks. Actions have read-only default workflow permissions and require full commit SHA pinning. Secret scanning push protection, Dependabot security updates, private vulnerability reporting, and Python CodeQL default setup are enabled.
+GitHub repository settings were reviewed and updated on 2026-08-07. The About description and topics match the current Windows GUI and CLI. Issues remain enabled, while unused Projects, Wiki, Discussions, and Pages features are disabled. Pull requests use squash merge only, merged branches are deleted automatically, and branch update suggestions are enabled. The default branch blocks force pushes and deletion, enforces linear history and resolved review conversations, and applies protection to administrators without requiring pull requests or status checks.
+
+Actions have read-only default workflow permissions, require full commit SHA pinning, and permit only GitHub-owned actions. Secret scanning, push protection, Dependabot security updates, private vulnerability reporting, and Python and Actions CodeQL default setup are enabled.
 
 - The first Python CodeQL default-setup run passed with zero code-scanning alerts.
 - Dependabot and secret-scanning alert counts are both zero.
-- Non-provider secret patterns and secret validity checks remain unavailable for this repository and are disabled.
-- The Windows CI workflow uses verified official action SHAs, read-only contents permission, non-persisted checkout credentials, and a 20-minute job timeout.
+- Non-provider secret patterns and secret validity checks remain unavailable for this account and are disabled.
+- The Windows CI workflow uses verified official action SHAs, read-only contents permission, non-persisted checkout credentials, and a 20-minute job timeout. Its two current runs failed at lint because CI installed Ruff 0.16.2; tests passed before the lint failure.
 
-The documentation was reviewed against the current 0.2.0 implementation, including URL matching, merge strategies, dry-run reporting, mappings, restore, manifests, logging, scheduling, standalone build support, Windows CI, and upgrade tracking on 2026-08-07.
+The documentation was reviewed against the current 0.2.0 implementation and live GitHub configuration, including repository metadata, security, merge policy, branch protection, Actions restrictions, Windows CI status, and upgrade tracking on 2026-08-07.
 
 ## Maintenance requirement
 

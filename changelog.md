@@ -8,14 +8,17 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
-- Added `future-upgrades.md` with three priority tiers, acceptance criteria, and nine proposed upgrades.
+- Added `future-upgrades.md` with three priority tiers, acceptance criteria, and ten proposed upgrades.
 - Added `completed-upgrades.md` with promotion rules and the version 0.2.0 capability baseline.
+- Added deterministic Ruff configuration and version control to the Priority 1 upgrade backlog after live Windows CI exposed dependency drift.
 
 ### Security
 
 - Rejected manifest entries containing traversal paths, invalid sizes, or malformed SHA-256 values.
 - Rejected profile mapping files whose root document does not contain a mapping list.
 - Disabled persisted checkout credentials and added a 20-minute timeout to the SHA-pinned Windows CI job.
+- Restricted Actions to GitHub-owned actions while retaining required full commit SHA pinning and read-only workflow permissions.
+- Strengthened `main` protection with linear-history and review-conversation-resolution requirements while retaining administrator enforcement and force-push and deletion blocks.
 
 ### Changed
 
@@ -23,6 +26,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - Documented that standalone executable artifacts are not Authenticode-signed.
 - Required completed upgrades to leave the future backlog, enter the completed ledger with verification evidence, and be replaced by at least one new candidate.
 - Linked both upgrade tracking files from the README and synchronized the assessment maintenance rules.
+- Updated the GitHub About description and topics for the current Windows GUI and CLI feature set.
+- Disabled unused GitHub Projects and Wiki features while retaining Issues and the existing disabled Discussions and Pages state.
+- Standardized pull requests on squash merge, enabled branch update suggestions, and enabled automatic deletion of merged branches.
+- Recorded the live Windows CI Ruff 0.16.2 lint failure as a release-readiness finding; tests pass before the failing lint step.
 
 ## [0.2.0] - 2026-08-07
 

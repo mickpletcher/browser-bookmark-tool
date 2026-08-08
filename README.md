@@ -369,6 +369,8 @@ Bookmark files, backups, and profile mappings can expose browsing history, inter
 
 Report security vulnerabilities privately through GitHub. See the [security policy](SECURITY.md) for the reporting process and evidence requirements.
 
+The GitHub repository keeps Issues enabled and disables unused Projects, Wiki, Discussions, and Pages features. Pull requests use squash merge only and merged branches are deleted automatically. The protected `main` branch blocks force pushes and deletion, enforces linear history and resolved review conversations, and applies the rules to administrators. GitHub Actions has read-only default permissions, requires full commit SHA pinning, and permits only GitHub-owned actions. Secret scanning, push protection, Dependabot security updates, private vulnerability reporting, and CodeQL default setup are enabled. Non-provider secret patterns and secret validity checks are unavailable for this account and remain disabled.
+
 ## Restore a backup
 
 1. Close Chrome and Edge completely.
@@ -420,7 +422,7 @@ Build the standalone executable:
 .\build.ps1
 ```
 
-The executable is written to `dist\BrowserBookmarkTool.exe`. The SHA-pinned Windows workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) installs development dependencies, runs tests, compiles the Python files, checks the CLI, builds the executable, and uploads it as a workflow artifact.
+The executable is written to `dist\BrowserBookmarkTool.exe`. The SHA-pinned Windows workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) is configured to install development dependencies, run tests, compile the Python files, check the CLI, build the executable, and upload it as a workflow artifact. Current live workflow status and any release blockers are recorded in [assessment.md](assessment.md).
 
 The current test suite contains 55 passing cases covering conservative and aggressive URL matching, five merge strategies, dry-run reporting, named multi-profile execution, restore safety, SHA-256 manifests, manifest path validation, privacy-safe logging, Python and standalone Task Scheduler generation, GUID handling, organization, retention, transactional writes, process controls, CLI behavior, and GUI errors.
 

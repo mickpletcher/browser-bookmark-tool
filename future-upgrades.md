@@ -48,6 +48,17 @@ Acceptance criteria:
 - Package contents exclude browser data, local mappings, logs, and generated task scripts.
 - Release instructions document checksum verification in PowerShell.
 
+### FUT-010: Deterministic lint configuration
+
+Define stable Ruff rules and a tested version range so local development and Windows CI evaluate the same code with the same policy.
+
+Acceptance criteria:
+
+- `pyproject.toml` explicitly defines the enabled Ruff rule set.
+- Development dependencies prevent unreviewed Ruff behavior changes from breaking CI.
+- The current source and tests pass locally and on Windows CI with the selected configuration.
+- Dependency update guidance includes a lint-policy review before the allowed Ruff range changes.
+
 ## Priority 2: Planned
 
 These upgrades improve reporting, multi-profile administration, and browser coverage.
@@ -121,4 +132,3 @@ Acceptance criteria:
 - Bookmark titles and URLs are not displayed or stored.
 - Missing or pruned backup sets are represented clearly.
 - History can be filtered and exported without changing browser data.
-
