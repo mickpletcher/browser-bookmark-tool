@@ -1,0 +1,169 @@
+name: Release
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "build-release.ps1"
+      - "browser_bookmark_sync.py"
+      - "pyproject.toml"
+      - "README.md"
+      - "LICENSE"
+      - "SECURITY.md"
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate release package
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Build and verify unsigned validation package
+        shell: pwsh
+        run: |
+          $version = python -c "import pathlib, tomllib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
+          .\build-release.ps1 -Version $version -OutputDirectory (Join-Path $env:RUNNER_TEMP 'release-validation') -Mode Unsigned
+
+  release:
+    name: Sign and publish release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      artifact-metadata: write
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Validate version tag and main ancestry
+        shell: pwsh
+        run: |
+          $version = python -c "import pathlib, tomllib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match pyproject.toml version $version."
+          }
+          git fetch origin main
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release tag must point to a commit on main."
+          }
+
+      - name: Prepare executable and SBOM
+        id: prepare
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $outputDirectory = Join-Path $env:RUNNER_TEMP 'release'
+          .\build-release.ps1 -Version $version -OutputDirectory $outputDirectory -Mode Prepare
+          "output_directory=$outputDirectory" >> $env:GITHUB_OUTPUT
+          "executable_path=$(Join-Path $outputDirectory "BrowserBookmarkTool-$version.exe")" >> $env:GITHUB_OUTPUT
+          "sbom_path=$(Join-Path $outputDirectory "browser-bookmark-tool-$version.cdx.json")" >> $env:GITHUB_OUTPUT
+
+      - name: Sign in to Azure with OIDC
+        uses: Azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign executable with Azure Artifact Signing
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ steps.prepare.outputs.executable_path }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify signature and finalize package
+        id: build
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_SUBJECT: ${{ vars.WINDOWS_SIGNING_SUBJECT }}
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $outputDirectory = '${{ steps.prepare.outputs.output_directory }}'
+          .\build-release.ps1 -Version $version -OutputDirectory $outputDirectory -Mode Finalize
+          "output_directory=$outputDirectory" >> $env:GITHUB_OUTPUT
+          "archive_path=$(Join-Path $outputDirectory "browser-bookmark-tool-$version-windows-x64.zip")" >> $env:GITHUB_OUTPUT
+          "checksum_path=$(Join-Path $outputDirectory 'SHA256SUMS')" >> $env:GITHUB_OUTPUT
+          "executable_path=${{ steps.prepare.outputs.executable_path }}" >> $env:GITHUB_OUTPUT
+          "sbom_path=${{ steps.prepare.outputs.sbom_path }}" >> $env:GITHUB_OUTPUT
+
+      - name: Attest release provenance
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            ${{ steps.build.outputs.executable_path }}
+            ${{ steps.build.outputs.archive_path }}
+            ${{ steps.build.outputs.checksum_path }}
+            ${{ steps.build.outputs.sbom_path }}
+
+      - name: Attest package SBOM
+        id: sbom
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.build.outputs.archive_path }}
+          sbom-path: ${{ steps.build.outputs.sbom_path }}
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROVENANCE_URL: ${{ steps.provenance.outputs.attestation-url }}
+          SBOM_ATTESTATION_URL: ${{ steps.sbom.outputs.attestation-url }}
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $releaseDirectory = '${{ steps.build.outputs.output_directory }}'
+          $notes = @"
+          Trusted Windows release for version $version.
+
+          Verify the Authenticode signature, SHA-256 checksums, and GitHub attestations before running the executable.
+
+          Provenance: $env:PROVENANCE_URL
+          SBOM attestation: $env:SBOM_ATTESTATION_URL
+          "@
+          $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          Set-Content -LiteralPath $notesPath -Value $notes -Encoding utf8NoBOM
+          $assets = @(Get-ChildItem -LiteralPath $releaseDirectory -File | ForEach-Object FullName)
+          gh release create $env:GITHUB_REF_NAME @assets --verify-tag --title "Browser Bookmark Tool $version" --notes-file $notesPath
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub Release creation failed with exit code $LASTEXITCODE."
+          }

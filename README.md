@@ -9,11 +9,11 @@ The synchronization uses a conservative union. A bookmark found in either browse
 
 ## Project status
 
-Version: 0.2.0
+Version: 0.3.0
 
-Release readiness: Ready for the next source release
+Release readiness: Source ready; trusted signing credential required for binary release
 
-The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The current `main` branch passes Windows CI and CodeQL. The executable remains unsigned, so broad binary distribution should wait for the tracked signing and release-package work. Native macOS Chrome and Edge compatibility and later Safari support are separate future upgrades and are not currently implemented.
+The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The current `main` branch passes Windows CI and CodeQL. Release automation now fails closed unless Azure Artifact Signing can sign and timestamp the executable, the workflow can verify the expected publisher and signature, and checksums, a CycloneDX SBOM, and GitHub provenance are published. No Azure signing account is currently configured, so broad binary distribution remains blocked. Native macOS Chrome and Edge compatibility and later Safari support are separate future upgrades and are not currently implemented.
 
 - [Current assessment](assessment.md)
 - [Changelog](changelog.md)
@@ -51,6 +51,7 @@ The GUI, CLI, standalone build, automated tests, transactional writes, dry-run r
 - Generates PowerShell scripts for Windows Task Scheduler with backup-only defaults.
 - Builds a standalone Windows executable with PyInstaller.
 - Runs tests and produces the executable through SHA-pinned Windows GitHub Actions.
+- Validates versioned Windows release packages and requires Authenticode signing, checksums, a CycloneDX SBOM, and GitHub attestations before publication.
 - Provides scheduler-safe configuration, readiness checks, concurrency locking, and privacy-safe JSON results for local Codex, Claude, Copilot, or deterministic schedulers.
 - Supports a Tkinter desktop interface and command-line execution.
 - Includes a Windows batch launcher that installs the project in editable mode and starts the app.
@@ -128,6 +129,37 @@ py -m pip install -e .
 ```
 
 The installation provides the `browser-bookmark-tool` console command. Some Python installations do not add their `Scripts` directory to `PATH`. The documented `py -m browser_bookmark_sync` commands and the batch launcher work without that PATH entry.
+
+## Verify a Windows release
+
+Do not run a downloaded executable unless all three checks pass.
+
+Verify the Authenticode signature:
+
+```powershell
+$signature = Get-AuthenticodeSignature .\BrowserBookmarkTool-0.3.0.exe
+$signature | Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+if ($signature.Status -ne 'Valid') { throw 'Authenticode signature validation failed.' }
+```
+
+Verify the published SHA-256 checksum:
+
+```powershell
+$fileName = 'BrowserBookmarkTool-0.3.0.exe'
+$expected = ((Select-String -Path .\SHA256SUMS -Pattern "  $([regex]::Escape($fileName))$").Line -split '  ')[0]
+$actual = (Get-FileHash -Algorithm SHA256 -Path ".\$fileName").Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw 'SHA-256 checksum validation failed.' }
+```
+
+Verify GitHub build provenance with GitHub CLI:
+
+```powershell
+gh attestation verify .\BrowserBookmarkTool-0.3.0.exe `
+    --repo mickpletcher/browser-bookmark-tool `
+    --signer-workflow mickpletcher/browser-bookmark-tool/.github/workflows/release.yml
+```
+
+Each release also includes the versioned ZIP, `SHA256SUMS`, and a CycloneDX JSON SBOM. The release workflow publishes the files only after signature and checksum verification succeeds.
 
 ## Run the desktop app
 
@@ -431,7 +463,7 @@ Do not restore a Chrome backup into Edge or an Edge backup into Chrome unless yo
 - Task Scheduler support generates a reviewed PowerShell registration script. It does not silently register tasks.
 - Cloud-hosted AI agents cannot access browser profiles on the local Windows computer. Scheduled browser operations require a local scheduler or a tightly controlled self-hosted Windows runner using the same Windows account.
 - The standalone executable is Windows-only and is built as a console-capable application so CLI output remains available.
-- The standalone executable is not Authenticode-signed. Build it from source or use a trusted workflow artifact.
+- No public executable release exists until a trusted Authenticode certificate is configured. Build from source until the signed release workflow succeeds.
 
 Track fixes and release-readiness changes in the [assessment](assessment.md) and [changelog](changelog.md).
 
@@ -460,6 +492,28 @@ Build the standalone executable:
 ```
 
 The executable is written to `dist\BrowserBookmarkTool.exe`. The SHA-pinned Windows workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) tests Python 3.10 through 3.13, runs lint, compilation, CLI, and dependency checks, builds the executable after the test matrix passes, and retains the workflow artifact for 14 days. Current live workflow status and any release blockers are recorded in [assessment.md](assessment.md).
+
+Validate the release packaging locally without creating a distributable signed package:
+
+```powershell
+.\build-release.ps1 -Version 0.3.0 -OutputDirectory .\release -Mode Unsigned
+```
+
+The script creates an isolated temporary Python environment for PyInstaller and CycloneDX. This prevents unrelated global packages and local editable-install paths from entering the SBOM. `-Mode Unsigned` adds `-unsigned` to executable and ZIP names. It is for packaging validation only. The tag-triggered [.github/workflows/release.yml](.github/workflows/release.yml) uses separate prepare and finalize phases around Azure signing.
+
+The `release` GitHub environment accepts only `v*` tags. Configure these values in that environment before creating `v0.3.0`:
+
+- Secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`: the OIDC-enabled Azure app registration values.
+- Variable `AZURE_ARTIFACT_SIGNING_ENDPOINT`: the regional Artifact Signing endpoint.
+- Variable `AZURE_ARTIFACT_SIGNING_ACCOUNT`: the Artifact Signing account name.
+- Variable `AZURE_ARTIFACT_SIGNING_PROFILE`: the public-trust certificate profile name.
+- Variable `WINDOWS_SIGNING_SUBJECT`: the exact expected Authenticode signer subject.
+
+Configure the Azure federated credential for the `repo:mickpletcher/browser-bookmark-tool:environment:release` subject and grant the identity the Artifact Signing Certificate Profile Signer role on the certificate profile. [Publicly trusted code-signing keys must remain hardware protected](https://cabforum.org/working-groups/code-signing/requirements/), so the workflow uses OIDC and [Azure Artifact Signing](https://learn.microsoft.com/en-us/azure/artifact-signing/how-to-signing-integrations) instead of storing an exportable private key in GitHub.
+
+The workflow requires the tag version to match `pyproject.toml` and the tagged commit to be on `main`. It builds the unsigned executable and SBOM, signs with SHA-256 and an RFC 3161 timestamp, verifies `Valid` status, the code-signing EKU, the expected publisher subject, and the timestamp, generates and verifies `SHA256SUMS`, publishes provenance and SBOM attestations, and then creates the GitHub Release. Missing or invalid Azure configuration stops the job before publication.
+
+The repository Actions allowlist still requires full commit SHA pinning. It permits GitHub-owned actions plus only the exact reviewed Azure Login 3.0.1 and Azure Artifact Signing 2.0.0 commits used by the release workflow.
 
 The current test suite contains 80 passing cases covering conservative and aggressive URL matching, five merge strategies, dry-run reporting, named multi-profile execution, restore safety, SHA-256 manifests, manifest path validation, privacy-safe logging, Python and standalone Task Scheduler generation, scheduler configuration, absolute-path enforcement, readiness, active and stale locking, structured results, health history, failure rate limiting and recovery, notification redaction, process-override rejection, the PowerShell automation wrapper, failure artifact reporting, GUID handling, organization, retention, transactional writes, process controls, CLI behavior, and GUI errors.
 

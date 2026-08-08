@@ -19,6 +19,8 @@ These upgrades address distribution trust, recovery confidence, and release inte
 
 Sign the standalone Windows executable through CI using protected credentials and a trusted timestamp service.
 
+Implementation status: The fail-closed Azure Artifact Signing and verification workflow is implemented. Completion is blocked until a signing account, verified public-trust certificate profile, OIDC identity, signer role, and environment values are configured and a release executable verifies as `Valid`.
+
 Acceptance criteria:
 
 - The release executable has a valid Authenticode signature.
@@ -41,6 +43,8 @@ Acceptance criteria:
 
 Create versioned release packages containing the executable, documentation, license, and published SHA-256 checksums.
 
+Implementation status: Versioned package construction and checksum verification are implemented. Completion is blocked until the first trusted signed release is published and independently verified.
+
 Acceptance criteria:
 
 - CI creates deterministic package names tied to the project version.
@@ -51,6 +55,8 @@ Acceptance criteria:
 ### FUT-015: Release artifact provenance and SBOM
 
 Publish verifiable provenance and a software bill of materials with each versioned release package.
+
+Implementation status: CycloneDX generation and SHA-pinned GitHub attestation steps are implemented. Completion is blocked until the first trusted signed release publishes and verifies both attestations.
 
 Acceptance criteria:
 

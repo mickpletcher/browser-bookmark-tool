@@ -8,6 +8,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
+- Added a fail-closed versioned Windows release workflow that requires Azure Artifact Signing through OIDC, timestamp and publisher verification, SHA-256 checksums, a CycloneDX SBOM, and GitHub provenance before publishing a Release.
+- Added an explicit unsigned local validation mode whose executable and archive names include `-unsigned` and which never publishes artifacts.
+- Added isolated release dependencies and SBOM path-leak checks so global packages and local editable-install paths cannot enter a published SBOM.
+- Added copy-ready Authenticode, checksum, and GitHub attestation verification instructions.
 - Added `future-upgrades.md` with three priority tiers, acceptance criteria, and thirteen proposed upgrades.
 - Added `completed-upgrades.md` with promotion rules and the version 0.2.0 capability baseline.
 - Added deterministic Ruff configuration and version control to the Priority 1 upgrade backlog after live Windows CI exposed dependency drift.
@@ -31,6 +35,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Security
 
+- Restricted release publication to the `release` environment and `v*` tags, kept private signing keys out of GitHub, and used short-lived OIDC authentication for managed hardware-backed signing.
+- Kept full-SHA Actions enforcement and expanded the allowlist only for the exact reviewed Azure Login 3.0.1 and Azure Artifact Signing 2.0.0 commits.
+- Replaced classic `main` protection with a solo-maintainer ruleset that permits administrator emergency bypass, blocks deletion and non-fast-forward pushes, requires current pull requests with resolved conversations and all five Windows CI checks, and allows squash merge only.
 - Rejected manifest entries containing traversal paths, invalid sizes, or malformed SHA-256 values.
 - Rejected profile mapping files whose root document does not contain a mapping list.
 - Disabled persisted checkout credentials and added a 20-minute timeout to the SHA-pinned Windows CI job.
