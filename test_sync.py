@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import uuid
 from pathlib import Path
@@ -16,6 +17,7 @@ from browser_bookmark_sync import (
     automation_readiness,
     close_browser_processes,
     deduplicate_bookmarks,
+    discover_firefox_profiles,
     export_html,
     iter_urls,
     load_automation_config,
@@ -26,11 +28,13 @@ from browser_bookmark_sync import (
     parse_args,
     prepare_merged_data,
     prune_backups,
+    read_firefox_bookmarks,
     restore_json_backup,
     run_automation,
     running_browser_processes,
     save_profile_mapping,
     synchronize,
+    transactional_firefox_write,
     validate_backup_manifest,
     validate_unique_guids,
     verify_json_backup,
@@ -43,9 +47,67 @@ def data(*urls: str) -> dict:
     return {"roots": {"bookmark_bar": {"type": "folder", "id": "1", "name": "Bookmarks bar", "children": children}, "other": {"type": "folder", "id": "2", "name": "Other bookmarks", "children": []}}, "version": 1, "checksum": "old"}
 
 
+def firefox_profile(tmp_path: Path, *urls: str) -> Path:
+    profile = tmp_path / "Firefox" / "Profiles" / "test.default-release"
+    profile.mkdir(parents=True)
+    connection = sqlite3.connect(profile / "places.sqlite")
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.executescript(
+        """
+        CREATE TABLE moz_places (
+            id INTEGER PRIMARY KEY,
+            url TEXT UNIQUE,
+            url_hash INTEGER NOT NULL,
+            title TEXT,
+            rev_host TEXT NOT NULL DEFAULT '',
+            hidden INTEGER NOT NULL DEFAULT 0,
+            typed INTEGER NOT NULL DEFAULT 0,
+            frecency INTEGER NOT NULL DEFAULT -1,
+            guid TEXT UNIQUE NOT NULL,
+            foreign_count INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE moz_bookmarks (
+            id INTEGER PRIMARY KEY,
+            type INTEGER NOT NULL,
+            fk INTEGER,
+            parent INTEGER NOT NULL,
+            position INTEGER NOT NULL,
+            title TEXT,
+            dateAdded INTEGER NOT NULL DEFAULT 0,
+            lastModified INTEGER NOT NULL DEFAULT 0,
+            guid TEXT UNIQUE NOT NULL,
+            syncStatus INTEGER NOT NULL DEFAULT 0,
+            syncChangeCounter INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE moz_keywords (place_id INTEGER);
+        INSERT INTO moz_bookmarks (id, type, parent, position, title, guid)
+        VALUES
+            (1, 2, 0, 0, '', 'root________'),
+            (2, 2, 1, 0, 'Bookmarks Menu', 'menu________'),
+            (3, 2, 1, 1, 'Bookmarks Toolbar', 'toolbar_____'),
+            (4, 2, 1, 2, 'Other Bookmarks', 'unfiled_____'),
+            (5, 2, 1, 3, 'Mobile Bookmarks', 'mobile______');
+        """
+    )
+    for index, url in enumerate(urls, start=1):
+        place_id = 100 + index
+        connection.execute(
+            "INSERT INTO moz_places (id, url, url_hash, title, rev_host, guid, foreign_count) VALUES (?, ?, ?, ?, '', ?, 1)",
+            (place_id, url, sync_module.places_url_hash(url), url, f"placeguid{index:03d}"),
+        )
+        connection.execute(
+            "INSERT INTO moz_bookmarks (id, type, fk, parent, position, title, guid) VALUES (?, 1, ?, 3, ?, ?, ?)",
+            (200 + index, place_id, index - 1, url, f"bookmark{index:03d}"),
+        )
+    connection.commit()
+    connection.close()
+    return profile
+
+
 @pytest.fixture(autouse=True)
 def no_running_browsers(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(sync_module, "running_browser_processes", lambda: [])
+    monkeypatch.setattr(sync_module, "running_firefox_processes", lambda: [])
 
 
 def test_merge_deduplicates_and_retains_unique_links():
@@ -116,6 +178,186 @@ def test_export_html(tmp_path: Path):
     assert count == 1
     assert "NETSCAPE-Bookmark-file-1" in destination.read_text()
     assert "&amp;" in destination.read_text()
+
+
+def test_firefox_profile_discovery_uses_explicit_profiles_ini(tmp_path: Path):
+    source_profile = firefox_profile(tmp_path / "source", "https://firefox.test")
+    firefox_root = tmp_path / "Mozilla" / "Firefox"
+    relative_profile = firefox_root / "Profiles" / "default-release"
+    absolute_profile = tmp_path / "absolute-profile"
+    shutil.copytree(source_profile, relative_profile)
+    shutil.copytree(source_profile, absolute_profile)
+    profiles_ini = firefox_root / "profiles.ini"
+    profiles_ini.write_text(
+        "[Profile0]\nName=Default\nIsRelative=1\nPath=Profiles/default-release\nDefault=1\n\n"
+        f"[Profile1]\nName=Absolute\nIsRelative=0\nPath={absolute_profile.as_posix()}\n"
+    )
+
+    assert discover_firefox_profiles(profiles_ini) == [relative_profile.resolve(), absolute_profile.resolve()]
+
+
+def test_firefox_import_uses_selected_duplicate_mode(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    profile = firefox_profile(tmp_path, "https://EXAMPLE.test/Path/")
+    firefox = read_firefox_bookmarks(profile)
+
+    conservative, conservative_preview = prepare_merged_data(
+        data("https://example.test/path"),
+        data(),
+        duplicate_mode="conservative",
+        firefox=firefox,
+    )
+    aggressive, aggressive_preview = prepare_merged_data(
+        data("https://example.test/path"),
+        data(),
+        duplicate_mode="aggressive",
+        firefox=firefox,
+    )
+
+    assert len([node for root in conservative["roots"].values() for node in iter_urls(root)]) == 2
+    assert len([node for root in aggressive["roots"].values() for node in iter_urls(root)]) == 1
+    assert conservative_preview.firefox_count == aggressive_preview.firefox_count == 1
+    assert conservative_preview.firefox_enabled and aggressive_preview.firefox_enabled
+
+    chrome = tmp_path / "Chrome" / "Default"
+    edge = tmp_path / "Edge" / "Default"
+    chrome.mkdir(parents=True)
+    edge.mkdir(parents=True)
+    (chrome / "Bookmarks").write_text(json.dumps(data("https://chrome.test")))
+    (edge / "Bookmarks").write_text(json.dumps(data("https://edge.test")))
+    assert main(
+        [
+            "--dry-run",
+            "--chrome-profile",
+            str(chrome),
+            "--edge-profile",
+            str(edge),
+            "--firefox-profile",
+            str(profile),
+        ]
+    ) == 0
+    assert "Firefox bookmarks: 1" in capsys.readouterr().out
+
+
+def test_firefox_can_be_disabled_without_entering_firefox_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    chrome = tmp_path / "Chrome" / "Default"
+    edge = tmp_path / "Edge" / "Default"
+    chrome.mkdir(parents=True)
+    edge.mkdir(parents=True)
+    (chrome / "Bookmarks").write_text(json.dumps(data("https://chrome.test")))
+    (edge / "Bookmarks").write_text(json.dumps(data("https://edge.test")))
+    monkeypatch.setattr(sync_module, "read_firefox_bookmarks", lambda _profile: pytest.fail("Firefox was read"))
+
+    result = synchronize(chrome, edge, tmp_path / "backups", write=False)
+
+    assert result.firefox_count == 0
+    assert not list((tmp_path / "backups").glob("Firefox_*.sqlite"))
+    assert "firefox_count" not in json.loads(result.manifest_path.read_text())["summary"]
+    assert "firefox_count" not in result.log_path.read_text()
+    assert result.preview.render() == prepare_merged_data(data("https://chrome.test"), data("https://edge.test"))[1].render()
+
+
+def test_firefox_export_backs_up_before_write_and_adds_missing_bookmarks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    chrome = tmp_path / "Chrome" / "Default"
+    edge = tmp_path / "Edge" / "Default"
+    chrome.mkdir(parents=True)
+    edge.mkdir(parents=True)
+    (chrome / "Bookmarks").write_text(json.dumps(data("https://chrome.test")))
+    (edge / "Bookmarks").write_text(json.dumps(data("https://edge.test")))
+    firefox = firefox_profile(tmp_path, "https://firefox.test")
+    backup_dir = tmp_path / "backups"
+    original_checkpoint = sync_module.checkpoint_firefox_database
+
+    def assert_backup_precedes_write(path: Path):
+        firefox_backups = list(backup_dir.glob("Firefox_*.sqlite"))
+        manifests = list(backup_dir.glob("Manifest_*.json"))
+        assert len(firefox_backups) == len(manifests) == 1
+        validate_backup_manifest(manifests[0])
+        assert firefox_backups[0].name in {
+            entry["name"] for entry in json.loads(manifests[0].read_text())["files"]
+        }
+        original_checkpoint(path)
+
+    monkeypatch.setattr(sync_module, "checkpoint_firefox_database", assert_backup_precedes_write)
+
+    result = synchronize(
+        chrome,
+        edge,
+        backup_dir,
+        write=True,
+        firefox_profile=firefox,
+        firefox_export=True,
+    )
+
+    assert result.firefox_added == 2
+    assert {node["url"] for root in read_firefox_bookmarks(firefox)["roots"].values() for node in iter_urls(root)} == {
+        "https://chrome.test",
+        "https://edge.test",
+        "https://firefox.test",
+    }
+    firefox_backups = list(backup_dir.glob("Firefox_*.sqlite"))
+    assert len(firefox_backups) == 1
+    manifest = json.loads(result.manifest_path.read_text())
+    assert firefox_backups[0].name in {entry["name"] for entry in manifest["files"]}
+    validate_backup_manifest(result.manifest_path)
+    assert not list(firefox.glob("places.pending.*"))
+
+
+def test_firefox_running_blocks_export_after_backups(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    chrome = tmp_path / "Chrome" / "Default"
+    edge = tmp_path / "Edge" / "Default"
+    chrome.mkdir(parents=True)
+    edge.mkdir(parents=True)
+    (chrome / "Bookmarks").write_text(json.dumps(data("https://chrome.test")))
+    (edge / "Bookmarks").write_text(json.dumps(data("https://edge.test")))
+    firefox = firefox_profile(tmp_path, "https://firefox.test")
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setattr(sync_module, "running_firefox_processes", lambda: ["firefox.exe"])
+
+    with pytest.raises(RuntimeError, match="firefox.exe"):
+        synchronize(
+            chrome,
+            edge,
+            backup_dir,
+            write=True,
+            firefox_profile=firefox,
+            firefox_export=True,
+        )
+
+    assert len(list(backup_dir.glob("Firefox_*.sqlite"))) == 1
+    assert len(list(backup_dir.glob("Manifest_*.json"))) == 1
+
+
+def test_firefox_replacement_failure_restores_chrome_and_edge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    chrome = tmp_path / "Chrome" / "Default"
+    edge = tmp_path / "Edge" / "Default"
+    chrome.mkdir(parents=True)
+    edge.mkdir(parents=True)
+    chrome_file = chrome / "Bookmarks"
+    edge_file = edge / "Bookmarks"
+    chrome_original = data("https://chrome.test")
+    edge_original = data("https://edge.test")
+    chrome_file.write_text(json.dumps(chrome_original))
+    edge_file.write_text(json.dumps(edge_original))
+    firefox = firefox_profile(tmp_path, "https://firefox.test")
+    firefox_file = firefox / "places.sqlite"
+    firefox_staged = firefox / "places.pending.sqlite"
+    shutil.copy2(firefox_file, firefox_staged)
+    original_replace = sync_module.os.replace
+
+    def fail_firefox(source: Path | str, destination: Path | str):
+        if Path(destination) == firefox_file:
+            raise OSError("simulated Firefox replacement failure")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(sync_module.os, "replace", fail_firefox)
+
+    with pytest.raises(RuntimeError, match="Chrome and Edge were restored automatically"):
+        transactional_firefox_write(chrome_file, edge_file, firefox_file, data("https://merged.test"), firefox_staged)
+
+    assert json.loads(chrome_file.read_text()) == chrome_original
+    assert json.loads(edge_file.read_text()) == edge_original
 
 
 def test_deduplicate_bookmarks_removes_normalized_urls_across_folders():
@@ -938,13 +1180,24 @@ def test_operation_log_does_not_include_bookmark_urls(tmp_path: Path):
 
 def test_profile_mapping_round_trip(tmp_path: Path):
     path = tmp_path / "profile-mappings.json"
-    save_profile_mapping(path, ProfileMapping("Personal", Path("C:/Chrome"), Path("C:/Edge"), Path("D:/Backups")))
+    save_profile_mapping(
+        path,
+        ProfileMapping(
+            "Personal",
+            Path("C:/Chrome"),
+            Path("C:/Edge"),
+            Path("D:/Backups"),
+            Path("C:/Firefox"),
+        ),
+    )
     save_profile_mapping(path, ProfileMapping("Work", Path("W:/Chrome"), Path("W:/Edge"), Path("W:/Backups")))
 
     mappings = load_profile_mappings(path)
 
     assert sorted(mappings) == ["Personal", "Work"]
     assert mappings["Personal"].backup_dir == Path("D:/Backups")
+    assert mappings["Personal"].firefox_profile == Path("C:/Firefox")
+    assert mappings["Work"].firefox_profile is None
 
 
 def test_profile_mapping_rejects_invalid_document_shape(tmp_path: Path):
@@ -1112,6 +1365,8 @@ def test_load_automation_config_resolves_private_relative_paths(tmp_path: Path):
     assert config.mappings == ("Personal",)
     assert config.health_file == tmp_path / "browser-bookmark-automation-health.json"
     assert config.health_history_limit == 100
+    assert not config.firefox_enabled
+    assert not config.firefox_export
     assert not config.notifications_enabled
     assert config.notification_command == ()
 

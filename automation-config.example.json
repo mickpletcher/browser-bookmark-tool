@@ -11,6 +11,8 @@
   "duplicate_mode": "conservative",
   "merge_strategy": "chrome-wins",
   "browser_behavior": "block",
+  "firefox_enabled": false,
+  "firefox_export": false,
   "result_file": "C:\\Private\\browser-bookmark-automation-result.json",
   "lock_file": "C:\\Private\\browser-bookmark-automation.lock",
   "lock_timeout_minutes": 180,

@@ -8,6 +8,12 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
+- Added disabled-by-default Firefox import through explicit `profiles.ini`, CLI, GUI, profile-mapping, and automation configuration paths.
+- Added opt-in Firefox export that creates and manifests a consistent SQLite backup before any write, stages and validates the replacement, blocks on `firefox.exe`, and restores Chrome and Edge if the Firefox replacement fails.
+- Added cross-browser conservative and aggressive duplicate matching plus Firefox discovery, Places schema, backup ordering, manifest, process, disabled-mode, export, and three-browser rollback tests.
+- Added `FUT-018` Firefox recovery verification and restore as the replacement candidate for completed `FUT-006`.
+- Updated support, security, issue-reporting, package, and repository About metadata for optional Firefox support.
+- Added a 1280 by 640 repository social preview covering Chrome, Edge, optional Firefox, backup, export, synchronization, and transactional safety.
 - Added non-destructive JSON recovery verification through the GUI and CLI using an isolated temporary Chromium profile, schema validation, GUID validation, matching manifest checks, and count-only reports.
 - Added regression coverage for valid snapshots, corrupt JSON, invalid Chromium structure, duplicate GUIDs, manifest mismatches, live-file preservation, and GUI and CLI verification results.
 - Added `FUT-017` backup-set catalog and comparison as the replacement candidate for completed `FUT-002`.

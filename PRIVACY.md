@@ -6,9 +6,9 @@ Browser Bookmark Tool is a local Windows application. It does not include teleme
 
 ## Local data access
 
-The application reads the Chrome and Microsoft Edge bookmark files selected by the user. Depending on the requested operation, it can create local JSON recovery copies, a portable HTML export, SHA-256 manifests, count-only logs, private automation results, and capped health history. Synchronization and restore operations modify only the browser profile files explicitly selected by the user.
+The application reads the Chrome and Microsoft Edge bookmark files selected by the user. Firefox remains disabled by default; when explicitly enabled, the application reads the selected profile's `places.sqlite` database. Depending on the requested operation, it can create local JSON and SQLite recovery copies, a portable HTML export, SHA-256 manifests, count-only logs, private automation results, and capped health history. Synchronization and restore operations modify only the browser profile files explicitly selected by the user. Firefox writes require a separate export opt in.
 
-Bookmark titles, URLs, browser profile paths, backup paths, configuration files, and recovery files remain on the user's device unless the user independently copies or transmits them. The default logs and automation results exclude bookmark titles and URLs.
+Bookmark titles, URLs, browser profile paths, Firefox history stored in `places.sqlite`, backup paths, configuration files, and recovery files remain on the user's device unless the user independently copies or transmits them. The default logs and automation results exclude bookmark titles and URLs.
 
 ## Network transfers
 

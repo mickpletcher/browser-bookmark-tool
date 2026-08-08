@@ -8,7 +8,7 @@ Include:
 
 - Windows version
 - Python version or standalone executable version
-- Chrome and Edge versions
+- Chrome, Edge, and Firefox versions when applicable
 - The command or GUI action used
 - Expected and actual behavior
 - Sanitized error text
@@ -17,7 +17,7 @@ Do not attach browser `Bookmarks` files, backup files, profile mappings, schedul
 
 ## Scope
 
-The current release supports Chrome and Microsoft Edge on Windows. Native macOS, Safari, and Firefox support are not implemented. Planned work is tracked in [future-upgrades.md](future-upgrades.md).
+The current release supports Chrome and Microsoft Edge on Windows, plus disabled-by-default Firefox import and opt-in export. Native macOS and Safari support are not implemented. Direct Firefox recovery verification and restore remain planned work in [future-upgrades.md](future-upgrades.md).
 
 Support is best effort. There is no guaranteed response time.
 
