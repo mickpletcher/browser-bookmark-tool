@@ -107,7 +107,7 @@ Actions have read-only default workflow permissions, cannot approve pull request
 - Python and Actions CodeQL default setup is configured and current runs pass with zero code-scanning alerts.
 - Dependabot and secret-scanning alert counts are both zero.
 - Non-provider secret patterns and secret validity checks remain unavailable for this account and are disabled.
-- Windows CI runs `31238970704` and `31239476514` passed on `main`. The audit branch updates all official actions to their current releases, retains full SHA pinning, tests Python 3.10 through 3.13, checks installed dependencies, and builds only after the test matrix passes.
+- Windows CI runs `31238970704` and `31239476514` passed on `main`. Audit pull request run `31240802924` also passed Python 3.10 through 3.13, dependency checks, and the gated Windows executable build with current full-SHA official action pins. CodeQL run `31240802041` passed both Python and Actions analysis on the same commit.
 - The repository has one protected branch, no rulesets, tags, releases, packages, deployments, environments, webhooks, deploy keys, repository secrets, or repository variables, and no collaborators other than the owner.
 - Repository and full-history scans found no provider credential patterns. GitHub secret scanning also reports zero open alerts.
 
