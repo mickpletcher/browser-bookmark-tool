@@ -8,6 +8,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
+- Added read-only comparison of version 1 JSON and CSV preview reports with mapping-name matching and count-only settings, browser-count, planned-addition, duplicate, and folder-change differences.
+- Added optional aggregate policy gates for planned additions, duplicate removals, and folder changes with exit code `2` for exceeded thresholds.
+- Added default rejection of detailed preview reports, explicit private-data acknowledgment, count-only comparison output, cross-format schema validation, and no-write regression coverage.
+- Added `FUT-021` reusable preview policy profiles as the replacement candidate for completed `FUT-020`.
 - Added versioned JSON and row-oriented CSV output for direct and multi-mapping dry runs through `--preview-report`.
 - Added explicit `--include-bookmark-details` opt-in for merged bookmark names, URLs, and folder paths while keeping default reports limited to settings, counts, and change categories.
 - Added regression coverage for JSON and CSV schemas, default privacy, explicit details, multi-mapping aggregation, unsafe destinations, unsupported extensions, option dependencies, browser-file preservation, and backup-pruning isolation.

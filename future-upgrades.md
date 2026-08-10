@@ -135,18 +135,6 @@ Acceptance criteria:
 - Testing notification delivery does not access browser profiles, create backups, change bookmarks, or alter failure suppression history.
 - Tests cover successful delivery, timeout, missing command, nonzero exit, and payload redaction.
 
-### FUT-020: Preview report comparison and policy gates
-
-Compare versioned preview reports without reopening browser profiles and optionally enforce count-only automation thresholds.
-
-Acceptance criteria:
-
-- Comparison matches mapping names and reports settings, count, duplicate, and folder-change differences between two supported report schemas.
-- Optional thresholds can fail with a documented nonzero exit code when planned additions, duplicate removals, or folder changes exceed configured limits.
-- Detailed reports are rejected by default unless an explicit private-data acknowledgment is supplied.
-- Comparison never opens browser profiles, creates backups, changes either input report, or exposes bookmark details in default output.
-- Tests cover schema validation, missing mappings, count changes, thresholds, detailed-report rejection, and no-write behavior.
-
 ## Priority 3: Later
 
 These upgrades add optional portability and stronger protection for stored data.
@@ -195,3 +183,15 @@ Acceptance criteria:
 - No automatic or interactive deletion option is added.
 - Incomplete, invalid, and unrecognized files are excluded from duplicate conclusions and reported separately.
 - Tests cover identical, partially identical, distinct, incomplete, and invalid sets without changing backup files.
+
+### FUT-021: Reusable preview policy profiles
+
+Add private versioned policy files for repeatable preview-report gates with aggregate and per-mapping limits.
+
+Acceptance criteria:
+
+- A versioned JSON policy schema defines aggregate defaults and optional per-mapping limits for planned additions, duplicate removals, and folder changes.
+- Policies identify the expected baseline report by SHA-256 without embedding bookmark details or local profile paths.
+- Missing mappings, unexpected mappings, unsupported policy versions, and baseline hash mismatches fail closed with documented exit codes.
+- A sanitized example is tracked while real policy files and reports remain ignored and local.
+- Tests cover aggregate and per-mapping overrides, baseline validation, privacy-safe output, malformed policies, and no-write behavior.

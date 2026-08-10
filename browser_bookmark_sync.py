@@ -38,6 +38,26 @@ MERGE_STRATEGIES = ("chrome-wins", "edge-wins", "preserve-both", "merge-folders"
 BACKUP_CATALOG_FILTERS = ("all", "complete", "incomplete", "valid", "invalid")
 AUTOMATION_SCHEMA_VERSION = 1
 PREVIEW_REPORT_SCHEMA_VERSION = 1
+PREVIEW_REPORT_SETTINGS = {
+    "merge_strategy": str,
+    "duplicate_mode": str,
+    "firefox_enabled": bool,
+}
+PREVIEW_REPORT_COUNTS = {
+    "chrome_bookmarks": int,
+    "edge_favorites": int,
+    "firefox_bookmarks": int,
+    "final_bookmarks": int,
+}
+PREVIEW_REPORT_CHANGES = {
+    "chrome_only_urls": int,
+    "edge_only_urls": int,
+    "firefox_only_urls": int,
+    "input_duplicates": int,
+    "duplicates_removed": int,
+    "folders_added": int,
+    "folders_reordered": int,
+}
 AUTOMATION_OPERATIONS = ("backup", "sync", "dry-run")
 AUTOMATION_BROWSER_BEHAVIORS = ("block", "close")
 AUTOMATION_HEALTH_LIMIT = 100
@@ -204,6 +224,16 @@ def backup_retention(value: str) -> int:
     if not 1 <= keep <= MAX_BACKUPS:
         raise argparse.ArgumentTypeError("backup retention must be from 1 to 50")
     return keep
+
+
+def non_negative_integer(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("threshold must be a non-negative integer") from exc
+    if number < 0:
+        raise argparse.ArgumentTypeError("threshold must be a non-negative integer")
+    return number
 
 
 @dataclass
@@ -1653,6 +1683,282 @@ def write_preview_report(
     return destination
 
 
+@dataclass(frozen=True)
+class PreviewReport:
+    source: Path
+    bookmark_details_included: bool
+    mappings: dict[str, dict[str, dict[str, Any]]]
+
+
+@dataclass(frozen=True)
+class PreviewReportComparison:
+    older: PreviewReport
+    newer: PreviewReport
+    max_planned_additions: int | None = None
+    max_duplicate_removals: int | None = None
+    max_folder_changes: int | None = None
+
+    def policy_counts(self) -> dict[str, int]:
+        changes = [mapping["changes"] for mapping in self.newer.mappings.values()]
+        return {
+            "planned additions": sum(
+                change[metric]
+                for change in changes
+                for metric in ("chrome_only_urls", "edge_only_urls", "firefox_only_urls")
+            ),
+            "duplicate removals": sum(change["duplicates_removed"] for change in changes),
+            "folder changes": sum(
+                change["folders_added"] + change["folders_reordered"] for change in changes
+            ),
+        }
+
+    def policy_violations(self) -> tuple[str, ...]:
+        counts = self.policy_counts()
+        thresholds = {
+            "planned additions": self.max_planned_additions,
+            "duplicate removals": self.max_duplicate_removals,
+            "folder changes": self.max_folder_changes,
+        }
+        return tuple(
+            f"{label} {counts[label]} exceeds {limit}"
+            for label, limit in thresholds.items()
+            if limit is not None and counts[label] > limit
+        )
+
+    def render(self) -> str:
+        lines = [f"Preview report comparison: {self.older.source.name} to {self.newer.source.name}"]
+        older_names = set(self.older.mappings)
+        newer_names = set(self.newer.mappings)
+        for name in sorted(older_names - newer_names):
+            lines.append(f"{name}: missing from newer report")
+        for name in sorted(newer_names - older_names):
+            lines.append(f"{name}: missing from older report")
+        changed = False
+        for name in sorted(older_names & newer_names):
+            older_mapping = self.older.mappings[name]
+            newer_mapping = self.newer.mappings[name]
+            mapping_lines: list[str] = []
+            for category, metrics in (
+                ("settings", PREVIEW_REPORT_SETTINGS),
+                ("counts", PREVIEW_REPORT_COUNTS),
+                ("changes", PREVIEW_REPORT_CHANGES),
+            ):
+                for metric in metrics:
+                    older_value = older_mapping[category][metric]
+                    newer_value = newer_mapping[category][metric]
+                    if older_value == newer_value:
+                        continue
+                    if isinstance(older_value, int) and not isinstance(older_value, bool):
+                        difference = f" ({newer_value - older_value:+d})"
+                    else:
+                        difference = ""
+                    mapping_lines.append(
+                        f"  {category}.{metric}: {older_value} to {newer_value}{difference}"
+                    )
+            if mapping_lines:
+                changed = True
+                lines.append(f"{name}:")
+                lines.extend(mapping_lines)
+        if not changed and older_names == newer_names:
+            lines.append("No settings or count changes.")
+
+        counts = self.policy_counts()
+        lines.append(
+            "Newer report policy counts: "
+            f"{counts['planned additions']} planned additions, "
+            f"{counts['duplicate removals']} duplicate removals, "
+            f"{counts['folder changes']} folder changes."
+        )
+        violations = self.policy_violations()
+        if violations:
+            lines.append(f"Policy gate failed: {'; '.join(violations)}.")
+        elif any(
+            limit is not None
+            for limit in (
+                self.max_planned_additions,
+                self.max_duplicate_removals,
+                self.max_folder_changes,
+            )
+        ):
+            lines.append("Policy gate passed.")
+        lines.append("No browser profiles, backups, or input reports were changed.")
+        return "\n".join(lines)
+
+
+def preview_report_value(category: str, metric: str, value: Any) -> Any:
+    expected = {
+        "settings": PREVIEW_REPORT_SETTINGS,
+        "counts": PREVIEW_REPORT_COUNTS,
+        "changes": PREVIEW_REPORT_CHANGES,
+    }[category][metric]
+    if expected is bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.casefold() in ("true", "false"):
+            return value.casefold() == "true"
+    elif expected is int:
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+        if isinstance(value, str) and value.isdecimal():
+            return int(value)
+    elif isinstance(value, str) and value:
+        if metric == "merge_strategy" and value not in MERGE_STRATEGIES:
+            raise RuntimeError(f"Invalid preview report value for {category}.{metric}.")
+        if metric == "duplicate_mode" and value not in DUPLICATE_MODES:
+            raise RuntimeError(f"Invalid preview report value for {category}.{metric}.")
+        return value
+    raise RuntimeError(f"Invalid preview report value for {category}.{metric}.")
+
+
+def validate_preview_mapping(mapping: Any) -> tuple[str, dict[str, dict[str, Any]]]:
+    if not isinstance(mapping, dict) or not isinstance(mapping.get("mapping"), str) or not mapping["mapping"]:
+        raise RuntimeError("Each preview report mapping must have a non-empty name.")
+    validated: dict[str, dict[str, Any]] = {}
+    for category, metrics in (
+        ("settings", PREVIEW_REPORT_SETTINGS),
+        ("counts", PREVIEW_REPORT_COUNTS),
+        ("changes", PREVIEW_REPORT_CHANGES),
+    ):
+        values = mapping.get(category)
+        if not isinstance(values, dict) or set(values) != set(metrics):
+            raise RuntimeError(f"Preview report mapping {mapping['mapping']} has an invalid {category} section.")
+        validated[category] = {
+            metric: preview_report_value(category, metric, values[metric]) for metric in metrics
+        }
+    return mapping["mapping"], validated
+
+
+def load_json_preview_report(path: Path) -> PreviewReport:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Could not read preview report {path}.") from exc
+    if not isinstance(document, dict):
+        raise RuntimeError(f"Preview report {path} must contain a JSON object.")
+    if document.get("schema_version") != PREVIEW_REPORT_SCHEMA_VERSION or document.get("kind") != "preview-report":
+        raise RuntimeError(f"Preview report {path} uses an unsupported schema.")
+    details = document.get("bookmark_details_included")
+    mappings_value = document.get("mappings")
+    if (
+        not isinstance(document.get("generated_at"), str)
+        or not document["generated_at"]
+        or not isinstance(details, bool)
+        or not isinstance(mappings_value, list)
+        or not mappings_value
+    ):
+        raise RuntimeError(f"Preview report {path} is incomplete.")
+    mappings: dict[str, dict[str, dict[str, Any]]] = {}
+    for mapping in mappings_value:
+        name, validated = validate_preview_mapping(mapping)
+        if name in mappings:
+            raise RuntimeError(f"Preview report {path} contains duplicate mapping {name}.")
+        has_bookmarks = isinstance(mapping, dict) and "bookmarks" in mapping
+        if has_bookmarks and not isinstance(mapping["bookmarks"], list):
+            raise RuntimeError(f"Preview report {path} has invalid bookmark details.")
+        if has_bookmarks != details:
+            raise RuntimeError(f"Preview report {path} has inconsistent bookmark detail metadata.")
+        mappings[name] = validated
+    return PreviewReport(path, details, mappings)
+
+
+def load_csv_preview_report(path: Path) -> PreviewReport:
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as stream:
+            reader = csv.DictReader(stream)
+            fieldnames = reader.fieldnames
+            rows = list(reader)
+    except OSError as exc:
+        raise RuntimeError(f"Could not read preview report {path}.") from exc
+    default_fields = ["mapping", "category", "metric", "value"]
+    detail_fields = [*default_fields, "name", "url", "folder_path"]
+    if fieldnames not in (default_fields, detail_fields):
+        raise RuntimeError(f"Preview report {path} uses an unsupported CSV schema.")
+
+    metadata: dict[str, str] = {}
+    raw_mappings: dict[str, dict[str, Any]] = {}
+    bookmark_rows = False
+    bookmark_mappings: set[str] = set()
+    for row in rows:
+        category = row["category"]
+        metric = row["metric"]
+        mapping_name = row["mapping"]
+        if category == "report":
+            if mapping_name or metric in metadata:
+                raise RuntimeError(f"Preview report {path} has invalid report metadata.")
+            metadata[metric] = row["value"]
+            continue
+        if category == "bookmark":
+            if not mapping_name or not metric.isdecimal():
+                raise RuntimeError(f"Preview report {path} contains an invalid bookmark row.")
+            bookmark_rows = True
+            bookmark_mappings.add(mapping_name)
+            continue
+        schemas = {
+            "settings": PREVIEW_REPORT_SETTINGS,
+            "counts": PREVIEW_REPORT_COUNTS,
+            "changes": PREVIEW_REPORT_CHANGES,
+        }
+        if not mapping_name or category not in schemas or metric not in schemas[category]:
+            raise RuntimeError(f"Preview report {path} contains an invalid data row.")
+        mapping = raw_mappings.setdefault(mapping_name, {"mapping": mapping_name})
+        values = mapping.setdefault(category, {})
+        if metric in values:
+            raise RuntimeError(f"Preview report {path} contains duplicate data rows.")
+        values[metric] = row["value"]
+
+    if (
+        metadata.get("schema_version") != str(PREVIEW_REPORT_SCHEMA_VERSION)
+        or metadata.get("kind") != "preview-report"
+        or not metadata.get("generated_at")
+        or metadata.get("bookmark_details_included", "").casefold() not in ("true", "false")
+        or set(metadata) != {"schema_version", "kind", "generated_at", "bookmark_details_included"}
+    ):
+        raise RuntimeError(f"Preview report {path} uses invalid report metadata.")
+    details = metadata["bookmark_details_included"].casefold() == "true"
+    if details != (fieldnames == detail_fields) or bookmark_rows and not details:
+        raise RuntimeError(f"Preview report {path} has inconsistent bookmark detail metadata.")
+    if not raw_mappings:
+        raise RuntimeError(f"Preview report {path} contains no mappings.")
+    if not bookmark_mappings.issubset(raw_mappings):
+        raise RuntimeError(f"Preview report {path} contains details for an unknown mapping.")
+    mappings = dict(validate_preview_mapping(mapping) for mapping in raw_mappings.values())
+    return PreviewReport(path, details, mappings)
+
+
+def load_preview_report(path: Path, acknowledge_private_details: bool = False) -> PreviewReport:
+    if path.suffix.casefold() == ".json":
+        report = load_json_preview_report(path)
+    elif path.suffix.casefold() == ".csv":
+        report = load_csv_preview_report(path)
+    else:
+        raise RuntimeError("Preview report paths must end in .json or .csv.")
+    if report.bookmark_details_included and not acknowledge_private_details:
+        raise RuntimeError(
+            f"Preview report {path} contains private bookmark details; add "
+            "--acknowledge-private-preview-details to compare it."
+        )
+    return report
+
+
+def compare_preview_reports(
+    older_path: Path,
+    newer_path: Path,
+    acknowledge_private_details: bool = False,
+    max_planned_additions: int | None = None,
+    max_duplicate_removals: int | None = None,
+    max_folder_changes: int | None = None,
+) -> PreviewReportComparison:
+    older = load_preview_report(older_path, acknowledge_private_details)
+    newer = load_preview_report(newer_path, acknowledge_private_details)
+    return PreviewReportComparison(
+        older,
+        newer,
+        max_planned_additions,
+        max_duplicate_removals,
+        max_folder_changes,
+    )
+
+
 def count_bookmarks(data: dict[str, Any]) -> int:
     return sum(1 for root in data.get("roots", {}).values() for _ in iter_urls(root))
 
@@ -3024,6 +3330,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         metavar=("OLDER_STAMP", "NEWER_STAMP"),
         help="Compare counts in two complete, valid backup sets",
     )
+    operation_options.add_argument(
+        "--compare-preview-reports",
+        nargs=2,
+        type=Path,
+        metavar=("OLDER_REPORT", "NEWER_REPORT"),
+        help="Compare two versioned JSON or CSV preview reports without opening browser profiles",
+    )
     parser.add_argument("--chrome-profile", type=Path)
     parser.add_argument("--edge-profile", type=Path)
     parser.add_argument("--firefox-profile", type=Path, help="Explicit Firefox profile to import")
@@ -3064,6 +3377,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Include private bookmark names, URLs, and folder paths in --preview-report",
     )
+    parser.add_argument(
+        "--acknowledge-private-preview-details",
+        action="store_true",
+        help="Allow comparison of reports that explicitly contain private bookmark details",
+    )
+    parser.add_argument(
+        "--max-planned-additions",
+        type=non_negative_integer,
+        help="Fail preview comparison when newer URL additions exceed this count",
+    )
+    parser.add_argument(
+        "--max-duplicate-removals",
+        type=non_negative_integer,
+        help="Fail preview comparison when newer duplicate removals exceed this count",
+    )
+    parser.add_argument(
+        "--max-folder-changes",
+        type=non_negative_integer,
+        help="Fail preview comparison when newer folder additions and reorders exceed this count",
+    )
     parser.add_argument("--log-file", type=Path, help="Privacy-safe operation log path")
     parser.add_argument("--verbose", action="store_true", help="Print and log additional count-only details")
     parser.add_argument("--write-task-script", type=Path, help="Write a PowerShell scheduled-task registration script")
@@ -3101,9 +3434,14 @@ def main(argv: list[str] | None = None) -> int:
             args.verify_manifest,
             args.catalog_backups,
             args.compare_backups,
+            args.compare_preview_reports,
             args.catalog_filter != "all",
             args.preview_report,
             args.include_bookmark_details,
+            args.acknowledge_private_preview_details,
+            args.max_planned_additions is not None,
+            args.max_duplicate_removals is not None,
+            args.max_folder_changes is not None,
         )
     )
     if args.gui or not has_cli_operation:
@@ -3118,6 +3456,32 @@ def main(argv: list[str] | None = None) -> int:
     if args.include_bookmark_details and not args.preview_report:
         print("Error: --include-bookmark-details requires --preview-report.", file=sys.stderr)
         return 1
+    preview_comparison_options = (
+        args.acknowledge_private_preview_details
+        or args.max_planned_additions is not None
+        or args.max_duplicate_removals is not None
+        or args.max_folder_changes is not None
+    )
+    if preview_comparison_options and not args.compare_preview_reports:
+        print(
+            "Error: preview comparison acknowledgments and thresholds require --compare-preview-reports.",
+            file=sys.stderr,
+        )
+        return 1
+    if args.compare_preview_reports:
+        try:
+            comparison = compare_preview_reports(
+                *args.compare_preview_reports,
+                acknowledge_private_details=args.acknowledge_private_preview_details,
+                max_planned_additions=args.max_planned_additions,
+                max_duplicate_removals=args.max_duplicate_removals,
+                max_folder_changes=args.max_folder_changes,
+            )
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        print(comparison.render())
+        return 2 if comparison.policy_violations() else 0
 
     automation_path = args.check_automation or args.run_automation
     if automation_path:
