@@ -184,14 +184,15 @@ Acceptance criteria:
 - Incomplete, invalid, and unrecognized files are excluded from duplicate conclusions and reported separately.
 - Tests cover identical, partially identical, distinct, incomplete, and invalid sets without changing backup files.
 
-### FUT-022: Machine-readable preview policy results
+### FUT-023: Preview result catalog and trend summaries
 
-Write optional atomic count-only JSON results for preview comparisons and policy decisions.
+Summarize a local history of machine-readable preview policy results without reopening their source reports or policies.
 
 Acceptance criteria:
 
-- A versioned result records the input report hashes, policy hash when used, expected mapping names, aggregate and per-mapping counts, configured limits, violations, and exit code.
-- Default result data excludes bookmark names, URLs, folder paths, report paths, policy paths, and browser-profile paths.
-- Detailed input reports still require explicit acknowledgment, and their private bookmark fields never enter the result.
-- Result destinations cannot replace either input report or the selected policy and are ignored by Git by default.
-- Tests cover pass, threshold failure, invalid destination, detailed inputs, schema stability, atomic replacement, and no browser or backup access.
+- Cataloging reads only supported versioned preview result JSON files and never opens browser profiles, backups, input reports, or policy files.
+- Count-only summaries show run time, policy hash, expected mappings, pass or fail status, violations, and aggregate or per-mapping count trends.
+- Bookmark names, URLs, folder paths, source paths, and browser-profile paths are never accepted or emitted by the catalog schema.
+- Malformed, unsupported, and duplicate result files are reported separately and excluded from trends.
+- Filtering and export remain read-only and do not delete or replace result files.
+- Tests cover mixed policies, pass and failure history, mapping changes, invalid schemas, privacy, and exact input-directory preservation.

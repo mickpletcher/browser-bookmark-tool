@@ -39,6 +39,7 @@ BACKUP_CATALOG_FILTERS = ("all", "complete", "incomplete", "valid", "invalid")
 AUTOMATION_SCHEMA_VERSION = 1
 PREVIEW_REPORT_SCHEMA_VERSION = 1
 PREVIEW_POLICY_SCHEMA_VERSION = 1
+PREVIEW_RESULT_SCHEMA_VERSION = 1
 PREVIEW_POLICY_LIMITS = {
     "max_planned_additions": "planned additions",
     "max_duplicate_removals": "duplicate removals",
@@ -1824,6 +1825,111 @@ class PreviewReportComparison:
         return "\n".join(lines)
 
 
+def preview_result_counts(comparison: PreviewReportComparison, mapping_name: str | None = None) -> dict[str, int]:
+    counts = comparison.policy_counts(mapping_name)
+    return {
+        key.removeprefix("max_"): counts[label]
+        for key, label in PREVIEW_POLICY_LIMITS.items()
+    }
+
+
+def preview_result_limits(
+    comparison: PreviewReportComparison,
+    mapping_name: str | None = None,
+) -> dict[str, int | None]:
+    aggregate = {
+        "max_planned_additions": comparison.max_planned_additions,
+        "max_duplicate_removals": comparison.max_duplicate_removals,
+        "max_folder_changes": comparison.max_folder_changes,
+    }
+    if mapping_name is None:
+        return aggregate
+    mapping_limits = comparison.mapping_limits or {}
+    if mapping_name not in mapping_limits:
+        return dict.fromkeys(PREVIEW_POLICY_LIMITS)
+    return {**aggregate, **mapping_limits[mapping_name]}
+
+
+def preview_result_violations(
+    counts: dict[str, int],
+    limits: dict[str, int | None],
+) -> list[dict[str, int | str]]:
+    return [
+        {
+            "metric": key.removeprefix("max_"),
+            "actual": counts[key.removeprefix("max_")],
+            "limit": limit,
+        }
+        for key, limit in limits.items()
+        if limit is not None and counts[key.removeprefix("max_")] > limit
+    ]
+
+
+def preview_comparison_result(
+    comparison: PreviewReportComparison,
+    policy: PreviewPolicy | None,
+    exit_code: int,
+) -> dict[str, Any]:
+    aggregate_counts = preview_result_counts(comparison)
+    aggregate_limits = preview_result_limits(comparison)
+    mappings = []
+    for name in sorted(comparison.newer.mappings):
+        counts = preview_result_counts(comparison, name)
+        limits = preview_result_limits(comparison, name)
+        mappings.append(
+            {
+                "mapping": name,
+                "counts": counts,
+                "limits": limits,
+                "violations": preview_result_violations(counts, limits),
+            }
+        )
+    return {
+        "schema_version": PREVIEW_RESULT_SCHEMA_VERSION,
+        "kind": "preview-policy-result",
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "status": "failed" if exit_code else "passed",
+        "exit_code": exit_code,
+        "input_report_sha256": {
+            "older": sha256_file(comparison.older.source),
+            "newer": sha256_file(comparison.newer.source),
+        },
+        "policy_sha256": sha256_file(policy.source) if policy else None,
+        "expected_mappings": list(policy.expected_mappings) if policy else sorted(comparison.newer.mappings),
+        "aggregate": {
+            "counts": aggregate_counts,
+            "limits": aggregate_limits,
+            "violations": preview_result_violations(aggregate_counts, aggregate_limits),
+        },
+        "mappings": mappings,
+    }
+
+
+def validate_preview_result_destination(
+    destination: Path,
+    report_paths: tuple[Path, Path],
+    policy_path: Path | None = None,
+) -> Path:
+    if destination.suffix.casefold() != ".json":
+        raise RuntimeError("Preview result path must end in .json.")
+    resolved = destination.expanduser().resolve()
+    protected = {path.expanduser().resolve() for path in report_paths}
+    if policy_path:
+        protected.add(policy_path.expanduser().resolve())
+    if resolved in protected:
+        raise RuntimeError("Preview result cannot replace an input report or preview policy.")
+    return resolved
+
+
+def write_preview_comparison_result(
+    destination: Path,
+    comparison: PreviewReportComparison,
+    policy: PreviewPolicy | None,
+    exit_code: int,
+) -> Path:
+    return write_json_atomic(destination, preview_comparison_result(comparison, policy, exit_code))
+
+
 def preview_report_value(category: str, metric: str, value: Any) -> Any:
     expected = {
         "settings": PREVIEW_REPORT_SETTINGS,
@@ -3531,6 +3637,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Private versioned JSON policy for repeatable preview comparison gates",
     )
     parser.add_argument(
+        "--preview-result",
+        type=Path,
+        help="Write a versioned count-only JSON result for a preview comparison",
+    )
+    parser.add_argument(
         "--max-planned-additions",
         type=non_negative_integer,
         help="Fail preview comparison when newer URL additions exceed this count",
@@ -3588,6 +3699,7 @@ def main(argv: list[str] | None = None) -> int:
             args.include_bookmark_details,
             args.acknowledge_private_preview_details,
             args.preview_policy,
+            args.preview_result,
             args.max_planned_additions is not None,
             args.max_duplicate_removals is not None,
             args.max_folder_changes is not None,
@@ -3608,13 +3720,15 @@ def main(argv: list[str] | None = None) -> int:
     preview_comparison_options = (
         args.acknowledge_private_preview_details
         or args.preview_policy
+        or args.preview_result
         or args.max_planned_additions is not None
         or args.max_duplicate_removals is not None
         or args.max_folder_changes is not None
     )
     if preview_comparison_options and not args.compare_preview_reports:
         print(
-            "Error: preview comparison acknowledgments, policies, and thresholds require --compare-preview-reports.",
+            "Error: preview comparison acknowledgments, policies, results, and thresholds require "
+            "--compare-preview-reports.",
             file=sys.stderr,
         )
         return 1
@@ -3628,6 +3742,15 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if args.compare_preview_reports:
         try:
+            result_path = (
+                validate_preview_result_destination(
+                    args.preview_result,
+                    tuple(args.compare_preview_reports),
+                    args.preview_policy,
+                )
+                if args.preview_result
+                else None
+            )
             policy = load_preview_policy(args.preview_policy) if args.preview_policy else None
             comparison = compare_preview_reports(
                 *args.compare_preview_reports,
@@ -3637,11 +3760,16 @@ def main(argv: list[str] | None = None) -> int:
                 max_folder_changes=args.max_folder_changes,
                 policy=policy,
             )
-        except RuntimeError as exc:
+            exit_code = 2 if comparison.policy_violations() else 0
+            if result_path:
+                write_preview_comparison_result(result_path, comparison, policy, exit_code)
+        except (OSError, RuntimeError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
         print(comparison.render())
-        return 2 if comparison.policy_violations() else 0
+        if result_path:
+            print(f"Preview result written: {result_path.name}")
+        return exit_code
 
     automation_path = args.check_automation or args.run_automation
     if automation_path:

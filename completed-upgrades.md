@@ -115,3 +115,10 @@ The following capabilities were already complete when the upgrade tracking files
 - Release: Unreleased
 - Summary: Adds private version 1 JSON policies with an exact baseline report SHA-256, expected mapping contract, aggregate count limits, and optional per-mapping overrides. Policies fail closed on malformed schemas, baseline mismatches, missing or unexpected mappings, and conflicting direct thresholds. A sanitized path-free example is tracked while real policies remain ignored.
 - Verification: The 122-case suite covers aggregate and per-mapping limits, inherited defaults, baseline hash validation, missing and unexpected mappings, malformed versions, hashes, names, and limits, detailed-report acknowledgment, privacy-safe output, CLI conflicts, the sanitized example, and exact no-write behavior. Ruff and Python compilation pass.
+
+### FUT-022: Machine-readable preview policy results
+
+- Completed: 2026-08-09
+- Release: Unreleased
+- Summary: Adds optional atomic version 1 JSON results for preview comparisons and policy decisions. Results contain the input report hashes, policy hash when used, expected mapping names, aggregate and per-mapping counts, configured limits, violations, status, and exit code while excluding private bookmark fields and every local path.
+- Verification: The 129-case suite covers passing and failed gates, exact schema shape, input and policy hashes, aggregate and per-mapping values, protected report and policy destinations, detailed-report acknowledgment and redaction, atomic replacement, invalid options, and fail-on-call guards against browser or backup access. Ruff and Python compilation pass.
