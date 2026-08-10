@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible problem with the Windows application
+description: Report a reproducible problem on Windows or macOS
 title: "[Bug]: "
 labels:
   - bug
@@ -24,14 +24,15 @@ body:
       required: true
   - type: input
     attributes:
-      label: Windows and Python versions
-      placeholder: Windows 11 24H2, Python 3.13.3 or standalone executable
+      label: Operating system and Python versions
+      description: Include the macOS or Windows version and whether you ran from source or a standalone build.
+      placeholder: macOS 15.6 with Python 3.13.3, or Windows 11 24H2 standalone executable
     validations:
       required: true
   - type: input
     attributes:
       label: Browser versions
-      placeholder: Chrome 000, Edge 000, Firefox 000 when applicable
+      placeholder: Chrome 000, Edge 000, Firefox 000, Safari 00 when applicable
     validations:
       required: true
   - type: dropdown

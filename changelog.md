@@ -8,6 +8,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
+- Added an explicit Windows/macOS browser-support matrix and updated the repository social preview, support, contribution, bug-report, and pull-request guidance to reflect native macOS coverage and Safari's read-only safety boundary.
+
 - Added guided, user-controlled Safari HTML import preparation in the GUI and CLI without editing Safari or automating the final import.
 - Recorded successful physical-Mac validation of 285 bookmarks and 61 folders, manifest integrity, and an unchanged live Safari plist hash.
 

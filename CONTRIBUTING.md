@@ -1,6 +1,6 @@
 # Contributing
 
-Browser Bookmark Tool is a Windows-only Python application. Contributions should preserve its backup-first, add-only synchronization behavior unless a change explicitly redesigns that contract.
+Browser Bookmark Tool is a Windows and macOS Python application. It supports Chrome and Edge synchronization, optional Firefox import/export, and read-only Safari workflows on macOS. Contributions should preserve its backup-first, add-only synchronization behavior and Safari's no-write boundary unless a change explicitly redesigns those contracts.
 
 ## Before opening an issue
 
@@ -15,9 +15,11 @@ Browser Bookmark Tool is a Windows-only Python application. Contributions should
 py -m pip install -e ".[dev]"
 py -m pytest -q
 py -m ruff check .
-py -m py_compile browser_bookmark_sync.py test_sync.py
+py -m py_compile browser_bookmark_sync.py safari_adapter.py test_sync.py
 py -m browser_bookmark_sync --help
 ```
+
+On macOS, use `python3` in place of `py` and run `./run-browser-bookmark-tool.sh --help` as an additional launcher check.
 
 Run the standalone build when a change affects packaging, startup, or command-line behavior:
 
@@ -47,7 +49,7 @@ Release tags use `vMAJOR.MINOR.PATCH`, such as `v0.3.0`.
 - Add or update tests for behavior changes.
 - Update `README.md`, `assessment.md`, and `changelog.md` when behavior, configuration, packaging, or project status changes.
 - Update `future-upgrades.md` and `completed-upgrades.md` when a tracked upgrade is completed.
-- Confirm the Windows CI workflow passes on every supported Python version.
+- Confirm the cross-platform CI workflow passes, including the Windows Python matrix and native macOS test/build job.
 - Do not commit generated executables, build output, browser data, mappings, logs, results, health history, or scheduler files.
 
 Pull requests are squash merged. Write the title so it can serve as the final commit message.
