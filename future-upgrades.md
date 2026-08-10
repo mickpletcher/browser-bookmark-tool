@@ -184,14 +184,14 @@ Acceptance criteria:
 - Incomplete, invalid, and unrecognized files are excluded from duplicate conclusions and reported separately.
 - Tests cover identical, partially identical, distinct, incomplete, and invalid sets without changing backup files.
 
-### FUT-021: Reusable preview policy profiles
+### FUT-022: Machine-readable preview policy results
 
-Add private versioned policy files for repeatable preview-report gates with aggregate and per-mapping limits.
+Write optional atomic count-only JSON results for preview comparisons and policy decisions.
 
 Acceptance criteria:
 
-- A versioned JSON policy schema defines aggregate defaults and optional per-mapping limits for planned additions, duplicate removals, and folder changes.
-- Policies identify the expected baseline report by SHA-256 without embedding bookmark details or local profile paths.
-- Missing mappings, unexpected mappings, unsupported policy versions, and baseline hash mismatches fail closed with documented exit codes.
-- A sanitized example is tracked while real policy files and reports remain ignored and local.
-- Tests cover aggregate and per-mapping overrides, baseline validation, privacy-safe output, malformed policies, and no-write behavior.
+- A versioned result records the input report hashes, policy hash when used, expected mapping names, aggregate and per-mapping counts, configured limits, violations, and exit code.
+- Default result data excludes bookmark names, URLs, folder paths, report paths, policy paths, and browser-profile paths.
+- Detailed input reports still require explicit acknowledgment, and their private bookmark fields never enter the result.
+- Result destinations cannot replace either input report or the selected policy and are ignored by Git by default.
+- Tests cover pass, threshold failure, invalid destination, detailed inputs, schema stability, atomic replacement, and no browser or backup access.

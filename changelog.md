@@ -8,6 +8,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
+- Added private version 1 preview policies with baseline SHA-256 binding, exact expected-mapping validation, aggregate count limits, and optional per-mapping overrides.
+- Added fail-closed policy handling for malformed schemas, baseline mismatches, missing or unexpected mappings, and conflicts with direct threshold options.
+- Added a sanitized path-free `preview-policy.example.json`, private policy ignore rules, privacy-safe output, and no-write regression coverage.
+- Added `FUT-022` machine-readable preview policy results as the replacement candidate for completed `FUT-021`.
 - Added read-only comparison of version 1 JSON and CSV preview reports with mapping-name matching and count-only settings, browser-count, planned-addition, duplicate, and folder-change differences.
 - Added optional aggregate policy gates for planned additions, duplicate removals, and folder changes with exit code `2` for exceeded thresholds.
 - Added default rejection of detailed preview reports, explicit private-data acknowledgment, count-only comparison output, cross-format schema validation, and no-write regression coverage.
