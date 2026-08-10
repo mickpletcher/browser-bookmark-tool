@@ -710,7 +710,7 @@ Build the standalone executable:
 .\build.ps1
 ```
 
-On Windows the executable is written to `dist\BrowserBookmarkTool.exe`. On macOS, build with `python3 -m PyInstaller --noconfirm --clean --onefile --name BrowserBookmarkTool browser_bookmark_sync.py`; the executable is written to `dist/BrowserBookmarkTool`. The SHA-pinned cross-platform workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) retains both native smoke-tested artifacts for 14 days. Current live workflow status and release blockers are recorded in [assessment.md](assessment.md).
+On Windows the executable is written to `dist\BrowserBookmarkTool.exe`. On macOS, build with `python3 -m PyInstaller --noconfirm --clean --onefile --name BrowserBookmarkTool browser_bookmark_sync.py`; the executable is written to `dist/BrowserBookmarkTool`. The SHA-pinned cross-platform workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) retains the Windows artifact for 14 days and performs a native macOS build and smoke test without publishing the unsigned binary. Current live workflow status and release blockers are recorded in [assessment.md](assessment.md).
 
 Validate the release packaging locally without creating a distributable signed package:
 
