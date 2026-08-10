@@ -15,7 +15,7 @@ Version: 0.3.0
 
 Release readiness: Source ready; trusted signing credential required for binary release
 
-The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, non-destructive backup verification, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The current `main` branch passes Windows CI and CodeQL. Release automation fails closed unless a trusted provider signs and timestamps the executable, the workflow verifies the expected publisher and signature, and checksums, a CycloneDX SBOM, and GitHub provenance are published. The project is applying to the SignPath Foundation open-source program; the existing Azure-based workflow remains unchanged until SignPath approves the project and provides the required integration settings. No signing provider is currently configured, so broad binary distribution remains blocked. Native macOS Chrome and Edge compatibility and later Safari support are separate future upgrades and are not currently implemented.
+The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, read-only backup-set catalog and comparison, non-destructive backup verification, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The current `main` branch passes Windows CI and CodeQL. Release automation fails closed unless a trusted provider signs and timestamps the executable, the workflow verifies the expected publisher and signature, and checksums, a CycloneDX SBOM, and GitHub provenance are published. The project is applying to the SignPath Foundation open-source program; the existing Azure-based workflow remains unchanged until SignPath approves the project and provides the required integration settings. No signing provider is currently configured, so broad binary distribution remains blocked. Native macOS Chrome and Edge compatibility and later Safari support are separate future upgrades and are not currently implemented.
 
 - [Current assessment](assessment.md)
 - [Changelog](changelog.md)
@@ -55,6 +55,7 @@ The GUI, CLI, standalone build, automated tests, transactional writes, dry-run r
 - Restores Chrome or Edge independently from raw JSON recovery snapshots.
 - Saves and loads private named profile mappings and processes several mappings from the CLI.
 - Creates and validates SHA-256 backup manifests.
+- Catalogs generated backup sets by timestamp, flags missing or extra members, filters by completeness or validity, and compares count-only changes between verified sets without changing files.
 - Writes count-only logs that exclude bookmark URLs by default.
 - Generates PowerShell scripts for Windows Task Scheduler with backup-only defaults.
 - Builds a standalone Windows executable with PyInstaller.
@@ -362,6 +363,29 @@ py .\browser_bookmark_sync.py `
 
 The tool copies the snapshot into an isolated temporary Chromium profile, validates its root and node structure, rejects malformed or duplicate GUIDs, and verifies every file in the matching `Manifest_*` file. It reports bookmark and folder counts, removes the temporary profile, and never reads or writes a live browser profile. Use `--verify-manifest` only when supplying the matching manifest path explicitly.
 
+### Catalog and compare backup sets
+
+Inventory generated backups without supplying browser profiles:
+
+```powershell
+py .\browser_bookmark_sync.py `
+  --catalog-backups `
+  --catalog-filter all `
+  --backup-dir "D:\Browser Bookmark Backups"
+```
+
+The `all`, `complete`, `incomplete`, `valid`, and `invalid` filters are available in both the GUI and CLI. Completeness reports missing or extra generated set members. Validity covers manifest integrity and readable Chrome, Edge, or Firefox recovery content. Each complete, valid set shows bookmark and folder changes from the previous complete, valid set. Bookmark names and URLs are never displayed.
+
+Compare two complete, valid sets directly by generated timestamp:
+
+```powershell
+py .\browser_bookmark_sync.py `
+  --compare-backups 2026-08-08_12-00-00_000001 2026-08-08_13-00-00_000001 `
+  --backup-dir "D:\Browser Bookmark Backups"
+```
+
+Catalog and comparison operations read only the selected backup directory. Firefox SQLite inspection uses immutable mode so it does not create WAL or shared-memory sidecars. These operations do not open live browser profiles or create, rename, replace, prune, or delete backup files.
+
 ### Restore a JSON recovery snapshot
 
 Close the target browser, then restore it independently:
@@ -464,6 +488,9 @@ Backups and the HTML export are created before process termination. The command 
 | `--run-automation` | AI or local scheduling | Executes a private automation configuration under a concurrency lock and writes a privacy-safe JSON result. |
 | `--verify-backup` | Backup verification | Raw JSON recovery snapshot to validate without changing browser files. |
 | `--verify-manifest` | No | Explicit matching manifest path for `--verify-backup`. |
+| `--catalog-backups` | Backup catalog | Groups generated backup files by timestamp and reports count-only status and changes. |
+| `--catalog-filter` | No | Filters the catalog by `all`, `complete`, `incomplete`, `valid`, or `invalid`. |
+| `--compare-backups` | Backup comparison | Two generated timestamps identifying complete, valid sets to compare. |
 | `--chrome-profile` | CLI operations | Path to a Chrome profile containing `Bookmarks`. |
 | `--edge-profile` | CLI operations | Path to an Edge profile containing `Bookmarks`. |
 | `--firefox-profile` | No | Explicit Firefox profile containing `places.sqlite`; enables Firefox for a direct run. |
@@ -503,7 +530,7 @@ Manifest_YYYY-MM-DD_HH-MM-SS_microseconds.json
 browser-bookmark-tool.log
 ```
 
-The HTML file is the portable bookmark backup. It contains the merged collection and can be imported into browsers that support Netscape bookmark HTML. Chrome and Edge JSON files retain Chromium recovery metadata. `Firefox_*.sqlite` is a complete SQLite backup created through SQLite's backup API, including committed WAL data. The manifest records file names, sizes, SHA-256 hashes, and count-only operation data. The tool validates the manifest before retention pruning and can independently verify a selected Chromium recovery snapshot against its matching manifest before restore.
+The HTML file is the portable bookmark backup. It contains the merged collection and can be imported into browsers that support Netscape bookmark HTML. Chrome and Edge JSON files retain Chromium recovery metadata. `Firefox_*.sqlite` is a complete SQLite backup created through SQLite's backup API, including committed WAL data. The manifest records file names, sizes, SHA-256 hashes, and count-only operation data. The tool validates the manifest before retention pruning, can catalog and compare complete backup sets without changing them, and can independently verify a selected Chromium recovery snapshot against its matching manifest before restore.
 
 Retention is applied separately to Chrome JSON recovery snapshots, Edge JSON recovery snapshots, Firefox SQLite recovery snapshots, merged HTML backups, and manifests. The tool accepts 1 through 50 backup sets and defaults to 50. Microsecond timestamps prevent repeated runs during the same second from overwriting earlier files. The append-only operation log and pre-restore recovery files are not pruned automatically.
 
@@ -600,7 +627,7 @@ The repository Actions allowlist still requires full commit SHA pinning. It perm
 
 The project is applying for SignPath Foundation service as a no-cost alternative. Do not add SignPath credentials, actions, or signing steps until the application is approved and SignPath supplies the project configuration. If accepted, replace the Azure-specific signing step in a reviewed pull request while preserving tag validation, manual signing approval, version-metadata enforcement, signature and timestamp checks, checksums, SBOM generation, provenance, and fail-closed publication. Update the repository Actions allowlist only for exact reviewed and full-SHA-pinned dependencies required by that integration.
 
-The current test suite contains 94 passing cases covering conservative and aggressive cross-browser URL matching, explicit Firefox profile discovery, Firefox Places import and export, Firefox backup ordering and manifests, three-browser rollback, disabled-mode isolation, five merge strategies, dry-run reporting, named multi-profile execution, non-destructive backup verification, restore safety, Chromium schema checks, duplicate GUID rejection, SHA-256 manifests, manifest mismatch and path validation, privacy-safe logging, Task Scheduler generation, scheduler configuration, readiness, locking, structured results, health history, notification controls, organization, retention, transaction and process controls, CLI behavior, and GUI errors.
+The current test suite contains 100 passing cases covering conservative and aggressive cross-browser URL matching, explicit Firefox profile discovery, Firefox Places import and export, Firefox backup ordering and manifests, three-browser rollback, disabled-mode isolation, five merge strategies, dry-run reporting, named multi-profile execution, read-only backup catalog and comparison, non-destructive backup verification, restore safety, Chromium schema checks, duplicate GUID rejection, SHA-256 manifests, manifest mismatch and path validation, privacy-safe logging, Task Scheduler generation, scheduler configuration, readiness, locking, structured results, health history, notification controls, organization, retention, transaction and process controls, CLI behavior, and GUI errors.
 
 ## Contributing and support
 

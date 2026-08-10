@@ -8,6 +8,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
+- Added a read-only GUI and CLI backup catalog with generated-timestamp grouping, complete, incomplete, valid, and invalid filters, manifest status, browser-specific bookmark and folder counts, and deltas from the previous complete and valid set.
+- Added explicit count-only comparison for two complete, valid backup sets through `--compare-backups`.
+- Added regression coverage for complete sets, missing and extra members, manifest mismatches, unrelated files and directories, CLI and GUI reporting, and exact no-change backup-directory verification.
+- Added `FUT-019` duplicate backup-set detection as the replacement candidate for completed `FUT-017`.
 - Added disabled-by-default Firefox import through explicit `profiles.ini`, CLI, GUI, profile-mapping, and automation configuration paths.
 - Added opt-in Firefox export that creates and manifests a consistent SQLite backup before any write, stages and validates the replacement, blocks on `firefox.exe`, and restores Chrome and Edge if the Firefox replacement fails.
 - Added cross-browser conservative and aggressive duplicate matching plus Firefox discovery, Places schema, backup ordering, manifest, process, disabled-mode, export, and three-browser rollback tests.
@@ -48,6 +52,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Security
 
+- Used SQLite immutable mode for Firefox catalog inspection so read-only inventory cannot create WAL or shared-memory sidecars beside recovery snapshots.
 - Enforced Windows ProductName, ProductVersion, FileDescription, and OriginalFilename metadata in release builds and included the code-signing and privacy policies in release archives.
 - Documented that SignPath approval is pending, unsigned artifacts are not public releases, and provider-specific integration must not be added before configuration is reviewed.
 - Restricted release publication to the `release` environment and `v*` tags, kept private signing keys out of GitHub, and used short-lived OIDC authentication for managed hardware-backed signing.
@@ -67,6 +72,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Changed
 
+- Documented the local-only backup catalog data boundary in the README and privacy policy.
 - Corrected the README's stale branch-protection summary to match the active solo-maintainer ruleset and required Windows CI checks.
 - Added manifest retention and path-validation regression coverage.
 - Documented that standalone executable artifacts are not Authenticode-signed.

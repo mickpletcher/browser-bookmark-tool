@@ -15,7 +15,9 @@ from browser_bookmark_sync import (
     ProfileMapping,
     alphabetize_bookmarks,
     automation_readiness,
+    catalog_backup_sets,
     close_browser_processes,
+    compare_backup_sets,
     deduplicate_bookmarks,
     discover_firefox_profiles,
     export_html,
@@ -1052,6 +1054,156 @@ def verification_files(tmp_path: Path, document: dict | str) -> tuple[Path, Path
     manifest = tmp_path / f"Manifest_{stamp}.json"
     sync_module.write_backup_manifest(manifest, [backup])
     return backup, manifest
+
+
+def catalog_files(
+    directory: Path,
+    stamp: str,
+    chrome_urls: tuple[str, ...] = ("https://chrome.test",),
+    edge_urls: tuple[str, ...] = ("https://edge.test",),
+    firefox: Path | None = None,
+) -> dict[str, Path]:
+    directory.mkdir(parents=True, exist_ok=True)
+    files = {
+        "Chrome": directory / f"Chrome_{stamp}.json",
+        "Edge": directory / f"Edge_{stamp}.json",
+        "Bookmarks": directory / f"Bookmarks_{stamp}.html",
+    }
+    files["Chrome"].write_text(json.dumps(data(*chrome_urls)))
+    files["Edge"].write_text(json.dumps(data(*edge_urls)))
+    files["Bookmarks"].write_text("<!DOCTYPE NETSCAPE-Bookmark-file-1>")
+    if firefox:
+        files["Firefox"] = directory / f"Firefox_{stamp}.sqlite"
+        shutil.copy2(firefox / "places.sqlite", files["Firefox"])
+    files["Manifest"] = sync_module.write_backup_manifest(
+        directory / f"Manifest_{stamp}.json",
+        [path for name, path in files.items() if name != "Manifest"],
+    )
+    return files
+
+
+def test_backup_catalog_groups_complete_sets_and_compares_verified_counts(tmp_path: Path):
+    older_stamp = "2026-08-08_12-00-00_000001"
+    newer_stamp = "2026-08-08_13-00-00_000001"
+    catalog_files(tmp_path, older_stamp)
+    firefox = firefox_profile(tmp_path / "firefox-source", "https://firefox.test")
+    catalog_files(
+        tmp_path,
+        newer_stamp,
+        chrome_urls=("https://chrome.test", "https://new.test"),
+        firefox=firefox,
+    )
+    before = {path.name: path.read_bytes() for path in tmp_path.iterdir() if path.is_file()}
+
+    catalog = catalog_backup_sets(tmp_path)
+    comparison = compare_backup_sets(catalog, older_stamp, newer_stamp)
+
+    assert [item.stamp for item in catalog.sets] == [newer_stamp, older_stamp]
+    assert all(item.complete and item.valid for item in catalog.sets)
+    assert [(item.browser, item.bookmark_count, item.folder_count) for item in catalog.sets[0].artifacts] == [
+        ("Chrome", 2, 2),
+        ("Edge", 1, 2),
+        ("Firefox", 1, 3),
+    ]
+    rendered = catalog.render()
+    assert "change +1 bookmarks, +0 folders" in rendered
+    assert "https://" not in rendered
+    assert "Chrome: bookmarks 1 to 2 (+1)" in comparison.render()
+    assert before == {path.name: path.read_bytes() for path in tmp_path.iterdir() if path.is_file()}
+
+
+def test_backup_catalog_flags_missing_and_extra_members(tmp_path: Path):
+    missing_stamp = "2026-08-08_12-00-00_000001"
+    extra_stamp = "2026-08-08_13-00-00_000001"
+    missing = catalog_files(tmp_path, missing_stamp)
+    missing["Edge"].unlink()
+    catalog_files(tmp_path, extra_stamp)
+    firefox = firefox_profile(tmp_path / "extra-firefox", "https://firefox.test")
+    shutil.copy2(firefox / "places.sqlite", tmp_path / f"Firefox_{extra_stamp}.sqlite")
+
+    catalog = catalog_backup_sets(tmp_path)
+    by_stamp = {item.stamp: item for item in catalog.sets}
+
+    assert by_stamp[missing_stamp].missing_members == ("Edge",)
+    assert not by_stamp[missing_stamp].complete
+    assert by_stamp[extra_stamp].extra_members == ("Firefox",)
+    assert not by_stamp[extra_stamp].complete
+    assert catalog.filtered("incomplete") == catalog.sets
+    with pytest.raises(RuntimeError, match="complete, valid"):
+        compare_backup_sets(catalog, missing_stamp, extra_stamp)
+
+
+def test_backup_catalog_filters_manifest_mismatch_as_invalid(tmp_path: Path):
+    stamp = "2026-08-08_12-00-00_000001"
+    files = catalog_files(tmp_path, stamp)
+    files["Chrome"].write_text(json.dumps(data("https://tampered.test")))
+
+    catalog = catalog_backup_sets(tmp_path)
+
+    assert catalog.sets[0].complete
+    assert not catalog.sets[0].valid
+    assert catalog.sets[0].manifest_status == "invalid"
+    assert catalog.filtered("invalid") == catalog.sets
+    assert catalog.filtered("valid") == ()
+
+
+def test_backup_catalog_ignores_unrelated_files_and_directories(tmp_path: Path):
+    stamp = "2026-08-08_12-00-00_000001"
+    catalog_files(tmp_path, stamp)
+    (tmp_path / "Chrome_backup.json").write_text("private")
+    (tmp_path / "notes.txt").write_text("private")
+    (tmp_path / f"Edge_{stamp}.sqlite").write_text("not a generated member")
+    (tmp_path / "Manifest_2026-08-08_14-00-00_000001.json").mkdir()
+
+    catalog = catalog_backup_sets(tmp_path)
+
+    assert len(catalog.sets) == 1
+    assert catalog.sets[0].complete
+    assert catalog.sets[0].valid
+
+
+def test_cli_backup_catalog_filters_and_compares(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    older_stamp = "2026-08-08_12-00-00_000001"
+    newer_stamp = "2026-08-08_13-00-00_000001"
+    catalog_files(tmp_path, older_stamp)
+    catalog_files(tmp_path, newer_stamp, chrome_urls=("https://one.test", "https://two.test"))
+
+    assert main(["--catalog-backups", "--catalog-filter", "complete", "--backup-dir", str(tmp_path)]) == 0
+    output = capsys.readouterr().out
+    assert "Backup catalog: 2 set(s), filter complete" in output
+    assert "No live browser files or backup files were changed" in output
+
+    assert main(["--compare-backups", older_stamp, newer_stamp, "--backup-dir", str(tmp_path)]) == 0
+    assert "Chrome: bookmarks 1 to 2 (+1)" in capsys.readouterr().out
+
+    assert main(["--catalog-filter", "valid"]) == 1
+    assert "--catalog-filter requires --catalog-backups" in capsys.readouterr().err
+
+
+def test_gui_backup_catalog_uses_selected_filter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    class Value:
+        def __init__(self, value: str):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value: str):
+            self.value = value
+
+    catalog_files(tmp_path, "2026-08-08_12-00-00_000001")
+    app = object.__new__(App)
+    app.backups = Value(str(tmp_path))
+    app.catalog_filter = Value("valid")
+    app.status = Value("")
+    messages: list[tuple[str, str]] = []
+    monkeypatch.setattr(sync_module.messagebox, "showinfo", lambda title, message: messages.append((title, message)))
+
+    App._catalog_backups(app)
+
+    assert app.status.get() == "Cataloged 1 backup set(s) with the valid filter. No files were changed."
+    assert messages[0][0] == f"{sync_module.APP_NAME} Backup Catalog"
+    assert "filter valid" in messages[0][1]
 
 
 def test_verify_json_backup_is_non_destructive_and_reports_counts(tmp_path: Path):

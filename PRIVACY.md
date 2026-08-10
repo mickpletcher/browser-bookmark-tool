@@ -1,12 +1,12 @@
 # Privacy Policy
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 Browser Bookmark Tool is a local Windows application. It does not include telemetry, analytics, advertising, automatic update checks, cloud synchronization, or a built-in service that uploads bookmark data.
 
 ## Local data access
 
-The application reads the Chrome and Microsoft Edge bookmark files selected by the user. Firefox remains disabled by default; when explicitly enabled, the application reads the selected profile's `places.sqlite` database. Depending on the requested operation, it can create local JSON and SQLite recovery copies, a portable HTML export, SHA-256 manifests, count-only logs, private automation results, and capped health history. Synchronization and restore operations modify only the browser profile files explicitly selected by the user. Firefox writes require a separate export opt in.
+The application reads the Chrome and Microsoft Edge bookmark files selected by the user. Firefox remains disabled by default; when explicitly enabled, the application reads the selected profile's `places.sqlite` database. Backup catalog and comparison operations read only generated files in the selected backup directory, report generated timestamps, browser types, integrity status, and counts, and do not display bookmark names or URLs. Depending on the requested operation, the application can create local JSON and SQLite recovery copies, a portable HTML export, SHA-256 manifests, count-only logs, private automation results, and capped health history. Synchronization and restore operations modify only the browser profile files explicitly selected by the user. Firefox writes require a separate export opt in.
 
 Bookmark titles, URLs, browser profile paths, Firefox history stored in `places.sqlite`, backup paths, configuration files, and recovery files remain on the user's device unless the user independently copies or transmits them. The default logs and automation results exclude bookmark titles and URLs.
 

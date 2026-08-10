@@ -73,18 +73,6 @@ Acceptance criteria:
 
 These upgrades improve reporting, multi-profile administration, and browser coverage.
 
-### FUT-017: Backup-set catalog and comparison
-
-Add a read-only GUI and CLI inventory that groups generated Chrome, Edge, HTML, and manifest files into backup sets and compares count-only changes between verified sets.
-
-Acceptance criteria:
-
-- The catalog groups files by generated timestamp and flags missing or extra members without opening live browser profiles.
-- Manifest status, browser type, bookmark count, folder count, and count deltas are available without exposing bookmark names or URLs.
-- Users can filter complete, incomplete, valid, and invalid backup sets in the GUI and CLI.
-- Inventory and comparison never create, rename, replace, or delete backup files.
-- Tests cover complete, incomplete, mismatched, and unrelated-file directories.
-
 ### FUT-004: Machine-readable preview reports
 
 Allow dry-run results to be saved as privacy-safe JSON or CSV reports for review and automation.
@@ -194,3 +182,15 @@ Acceptance criteria:
 - Bookmark titles and URLs are not displayed or stored.
 - Missing or pruned backup sets are represented clearly.
 - History can be filtered and exported without changing browser data.
+
+### FUT-019: Duplicate backup-set detection
+
+Identify exact duplicate recovery content across complete, valid backup sets and report potential redundant storage without deleting files.
+
+Acceptance criteria:
+
+- Duplicate detection uses verified manifest hashes instead of bookmark names, URLs, or timestamps.
+- The report shows duplicate set counts, affected browser types, and potential recoverable bytes without exposing private content.
+- No automatic or interactive deletion option is added.
+- Incomplete, invalid, and unrecognized files are excluded from duplicate conclusions and reported separately.
+- Tests cover identical, partially identical, distinct, incomplete, and invalid sets without changing backup files.
