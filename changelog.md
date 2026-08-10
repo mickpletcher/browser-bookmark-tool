@@ -8,6 +8,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
+- Added guided, user-controlled Safari HTML import preparation in the GUI and CLI without editing Safari or automating the final import.
+- Recorded successful physical-Mac validation of 285 bookmarks and 61 folders, manifest integrity, and an unchanged live Safari plist hash.
+
 - Added the read-only phase of `FUT-011`: macOS Safari bookmark discovery, validated plist backups in SHA-256 manifests, bookmark-only parsing with Reading List exclusion, merge planning, duplicate handling, organization, portable HTML export, and GUI/CLI controls.
 - Added fail-closed Safari schema handling, iCloud synchronization warnings, privacy-safe count-only output, Safari backup catalog/verification support, and regression coverage without any Safari write path.
 

@@ -98,7 +98,7 @@ Acceptance criteria:
 - Safari support is implemented as a separate macOS adapter and does not weaken existing Windows or macOS Chrome, Edge, and Firefox behavior.
 - Tests cover supported macOS and Safari versions, malformed exports, duplicate handling, iCloud warnings, backup integrity, and failed writes.
 
-Status (2026-08-09): Open. The read-only first delivery is implemented: standard-location discovery, validated plist backup and manifest integrity, bookmark-only parsing with Reading List exclusion, preview/merge/duplicate/organization planning, portable HTML export, GUI/CLI support, privacy-safe reporting, and fail-closed schema handling. Direct Safari import/export mechanisms, iCloud write-state detection, Safari process enforcement, transactional replacement, rollback, supported-version write testing, and failed-write tests remain. No direct Safari write API exists in this phase.
+Status (2026-08-10): Open. The read-only delivery and guided, user-controlled HTML import preparation are implemented: standard-location discovery, validated plist backup and manifest integrity, bookmark-only parsing with Reading List exclusion, preview/merge/duplicate/organization planning, portable HTML export, GUI/CLI support, privacy-safe reporting, fail-closed schema handling, and physical-Mac no-change validation. Safari exposes no supported bookmark-write automation interface, so the tool does not edit its plist or automate the final import. Direct Safari writes, iCloud write-state detection, process enforcement, transactional replacement, rollback, supported-version write testing, and failed-write tests remain contingent on a supported Apple mechanism.
 
 ### FUT-024: Signed and notarized macOS distribution
 
