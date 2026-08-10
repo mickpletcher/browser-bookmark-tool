@@ -136,3 +136,10 @@ The following capabilities were already complete when the upgrade tracking files
 - Release: Unreleased
 - Summary: Adds isolated Firefox SQLite snapshot verification and GUI and CLI restore with manifest, integrity, Places schema, and required-root validation; platform-native process blocking; consistent preservation of the current database; staged replacement; stale WAL and shared-memory cleanup; and rollback-safe failure handling.
 - Verification: The 142-case suite covers valid, corrupt, mismatched, unsupported-schema, running-process, stale-sidecar, replacement-failure, GUI, and CLI paths. Ruff, compilation, dependency, and shell smoke checks pass. Physical macOS copied-profile and Windows 11 validation both pass without changing the live macOS profile.
+
+### FUT-011 phase 1: Read-only Safari bookmarks
+
+- Completed: 2026-08-09
+- Release: Unreleased
+- Summary: Delivers the completed read-only portion of still-open `FUT-011`: macOS discovery, validated plist copies, manifest integrity, bookmark-only parsing, preview and merge planning, duplicate handling, organization, portable HTML export, and GUI/CLI support. It contains no Safari write path.
+- Verification: The 152-case suite covers discovery, binary plist parsing, nested folders, Reading List exclusion, malformed and unsupported data, duplicates, backup integrity, HTML export, privacy, unsupported platforms, GUI/CLI behavior, and existing-browser regressions. A physical-Mac read-only check discovered the standard live file, while macOS privacy controls denied its contents without additional user-granted access; isolated binary-plist validation passed and no live Safari data was modified.

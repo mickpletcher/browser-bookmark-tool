@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 import browser_bookmark_sync as sync_module
+import safari_adapter
 from browser_bookmark_sync import (
     App,
     AutomationRunLock,
@@ -49,6 +50,51 @@ from browser_bookmark_sync import (
     write_launchd_plist,
     write_task_scheduler_script,
 )
+
+
+def safari_document(version: int = 1) -> dict:
+    return {
+        "WebBookmarkFileVersion": version,
+        "Children": [
+            {
+                "WebBookmarkType": "WebBookmarkTypeList",
+                "WebBookmarkIdentifier": "BookmarksBar",
+                "Title": "Favorites",
+                "Children": [
+                    {
+                        "WebBookmarkType": "WebBookmarkTypeList",
+                        "Title": "Nested",
+                        "Children": [
+                            {
+                                "WebBookmarkType": "WebBookmarkTypeLeaf",
+                                "URLString": "https://safari.test/path",
+                                "URIDictionary": {"title": "Private Safari title"},
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "WebBookmarkType": "WebBookmarkTypeList",
+                "WebBookmarkIdentifier": "com.apple.ReadingList",
+                "Title": "Reading List",
+                "Children": [
+                    {
+                        "WebBookmarkType": "WebBookmarkTypeLeaf",
+                        "URLString": "https://reading-list.test",
+                        "URIDictionary": {"title": "Never export"},
+                    }
+                ],
+            },
+        ],
+    }
+
+
+def write_safari_plist(path: Path, document: dict | None = None) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as stream:
+        plistlib.dump(document or safari_document(), stream, fmt=plistlib.FMT_BINARY)
+    return path
 
 
 @pytest.fixture(autouse=True)
@@ -3000,3 +3046,112 @@ def test_powershell_automation_wrapper_runs_readiness_check(tmp_path: Path):
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout)["status"] == "success"
     assert (tmp_path / "automation-result.json").exists()
+
+
+def test_safari_discovers_only_the_standard_macos_bookmark_file(tmp_path: Path):
+    expected = write_safari_plist(tmp_path / "Library" / "Safari" / "Bookmarks.plist")
+    assert safari_adapter.discover_safari_bookmarks(tmp_path, "darwin") == expected
+    with pytest.raises(RuntimeError, match="only on macOS"):
+        safari_adapter.discover_safari_bookmarks(tmp_path, "win32")
+
+
+def test_safari_parser_preserves_nested_bookmarks_and_excludes_reading_list(tmp_path: Path):
+    model = safari_adapter.read_safari_bookmarks(write_safari_plist(tmp_path / "Bookmarks.plist"))
+    urls = [node["url"] for root in model["roots"].values() for node in iter_urls(root)]
+    assert urls == ["https://safari.test/path"]
+    assert model["roots"]["bookmark_bar"]["children"][0]["name"] == "Nested"
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        ({"WebBookmarkFileVersion": 99, "Children": []}, "version 99"),
+        ({"WebBookmarkFileVersion": 1, "Children": "bad"}, "root structure"),
+        ({"WebBookmarkFileVersion": 1, "Children": [{"WebBookmarkType": "Unknown"}]}, "unsupported node type"),
+    ],
+)
+def test_safari_parser_fails_safely_for_unsupported_or_malformed_data(tmp_path: Path, document: dict, message: str):
+    path = write_safari_plist(tmp_path / "Bookmarks.plist", document)
+    with pytest.raises(RuntimeError, match=message):
+        safari_adapter.read_safari_bookmarks(path)
+
+
+def test_safari_backup_is_manifested_verified_and_live_file_unchanged(tmp_path: Path):
+    source = write_safari_plist(tmp_path / "live" / "Bookmarks.plist")
+    before = source.read_bytes()
+    destination = tmp_path / "Safari_2026-08-09_12-00-00_000001.plist"
+    safari_adapter.backup_safari_bookmarks(source, destination)
+    manifest = sync_module.write_backup_manifest(tmp_path / "Manifest_2026-08-09_12-00-00_000001.json", [destination])
+    report = sync_module.verify_backup(destination, manifest)
+    assert (report.backup_path, report.bookmark_count) == (destination, 1)
+    assert source.read_bytes() == before
+    destination.write_bytes(b"tampered")
+    with pytest.raises(RuntimeError, match="integrity validation failed"):
+        sync_module.verify_backup(destination, manifest)
+
+
+def test_safari_merge_duplicate_organization_and_html_export(tmp_path: Path):
+    safari = safari_adapter.read_safari_bookmarks(write_safari_plist(tmp_path / "Bookmarks.plist"))
+    merged, preview = prepare_merged_data(data("https://safari.test/path"), data("https://edge.test"), deduplicate=True, alphabetize=True, safari=safari)
+    html_path = tmp_path / "portable.html"
+    assert (preview.safari_count, preview.safari_only, preview.merged_count) == (1, 0, 2)
+    assert export_html(merged, html_path) == 2
+    assert "https://safari.test/path" in html_path.read_text()
+
+
+def test_safari_full_backup_export_has_manifest_and_private_log(tmp_path: Path):
+    chrome = tmp_path / "Chrome"
+    edge = tmp_path / "Edge"
+    chrome.mkdir()
+    edge.mkdir()
+    (chrome / "Bookmarks").write_text(json.dumps(data("https://chrome.test")))
+    (edge / "Bookmarks").write_text(json.dumps(data("https://edge.test")))
+    safari = write_safari_plist(tmp_path / "live" / "Bookmarks.plist")
+    before = safari.read_bytes()
+    result = synchronize(chrome, edge, tmp_path / "backups", write=False, safari_bookmarks=safari)
+    sync_module.validate_backup_manifest(result.manifest_path)
+    manifest = json.loads(result.manifest_path.read_text())
+    assert any(item["name"].startswith("Safari_") for item in manifest["files"])
+    catalog = catalog_backup_sets(result.backup_dir)
+    assert catalog.sets[0].valid
+    assert any(artifact.browser == "Safari" for artifact in catalog.sets[0].artifacts)
+    log = result.log_path.read_text()
+    assert "https://safari.test" not in log
+    assert "Private Safari title" not in log
+    assert str(safari) not in log
+    assert safari.read_bytes() == before
+
+
+def test_safari_cli_preview_is_macos_only_and_warns_about_icloud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+    chrome = tmp_path / "Chrome"
+    edge = tmp_path / "Edge"
+    chrome.mkdir()
+    edge.mkdir()
+    (chrome / "Bookmarks").write_text(json.dumps(data("https://chrome.test")))
+    (edge / "Bookmarks").write_text(json.dumps(data("https://edge.test")))
+    safari = write_safari_plist(tmp_path / "Bookmarks.plist")
+    args = ["--chrome-profile", str(chrome), "--edge-profile", str(edge), "--safari-bookmarks", str(safari), "--dry-run"]
+    assert main(args) == 1
+    assert "only on macOS" in capsys.readouterr().err
+    monkeypatch.setattr(sync_module, "is_macos", lambda: True)
+    assert main(args) == 0
+    output = capsys.readouterr().out
+    assert "Safari bookmarks: 1" in output
+    assert "iCloud" in output
+    assert "https://safari.test" not in output
+
+
+def test_safari_gui_discovers_read_only_source_without_enabling_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    safari = write_safari_plist(tmp_path / "Bookmarks.plist")
+    monkeypatch.setattr(sync_module, "discover_profiles", lambda _browser: [])
+    monkeypatch.setattr(sync_module, "discover_firefox_profiles", lambda: [])
+    monkeypatch.setattr(sync_module, "discover_safari_bookmarks", lambda: safari)
+    monkeypatch.setattr(sync_module, "is_macos", lambda: True)
+    root = sync_module.tk.Tk()
+    root.withdraw()
+    try:
+        app = App(root)
+        assert app.safari.get() == str(safari)
+        assert app.safari_enabled.get() is False
+    finally:
+        root.destroy()

@@ -28,6 +28,12 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from safari_adapter import (
+    backup_safari_bookmarks,
+    discover_safari_bookmarks,
+    read_safari_bookmarks,
+)
+
 APP_NAME = "Browser Bookmark Tool"
 ROOT_NAMES = ("bookmark_bar", "other", "synced")
 WINDOWS_BROWSER_PROCESS_NAMES = ("chrome.exe", "msedge.exe")
@@ -83,9 +89,9 @@ AUTOMATION_ERROR_CATEGORIES = (
     "automation",
 )
 BACKUP_NAME_PATTERN = re.compile(
-    r"^(?P<prefix>Chrome|Edge|Firefox|Bookmarks|Manifest)_"
+    r"^(?P<prefix>Chrome|Edge|Firefox|Safari|Bookmarks|Manifest)_"
     r"(?P<stamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:_\d{6})?)"
-    r"\.(?P<extension>json|sqlite|html)$"
+    r"\.(?P<extension>json|sqlite|plist|html)$"
 )
 
 
@@ -601,6 +607,8 @@ def write_backup_manifest(
         }
         if preview.firefox_enabled:
             summary["firefox_count"] = preview.firefox_count
+        if preview.safari_enabled:
+            summary["safari_count"] = preview.safari_count
         document["summary"] = summary
     destination.write_text(json.dumps(document, indent=2), encoding="utf-8")
     validate_backup_manifest(destination)
@@ -764,6 +772,10 @@ def verify_firefox_backup(backup_path: Path, manifest_path: Path | None = None) 
 
 
 def verify_backup(backup_path: Path, manifest_path: Path | None = None) -> BackupVerification:
+    if backup_path.suffix.casefold() == ".plist":
+        manifest = validate_manifest_member(backup_path, manifest_path)
+        data = read_safari_bookmarks(backup_path)
+        return BackupVerification(backup_path, manifest, count_bookmarks(data), count_folders(data))
     if backup_path.suffix.casefold() == ".sqlite":
         return verify_firefox_backup(backup_path, manifest_path)
     return verify_json_backup(backup_path, manifest_path)
@@ -1681,7 +1693,7 @@ def export_html(data: dict[str, Any], destination: Path) -> int:
 
 
 def prune_backups(directory: Path, keep: int) -> None:
-    groups: dict[str, list[tuple[str, Path]]] = {"Chrome": [], "Edge": [], "Firefox": [], "Bookmarks": [], "Manifest": []}
+    groups: dict[str, list[tuple[str, Path]]] = {"Chrome": [], "Edge": [], "Firefox": [], "Safari": [], "Bookmarks": [], "Manifest": []}
     for path in directory.glob("*"):
         if not path.is_file() or not (match := BACKUP_NAME_PATTERN.fullmatch(path.name)):
             continue
@@ -1691,7 +1703,9 @@ def prune_backups(directory: Path, keep: int) -> None:
             continue
         if prefix == "Firefox" and extension != "sqlite":
             continue
-        if prefix not in ("Bookmarks", "Firefox") and extension != "json":
+        if prefix == "Safari" and extension != "plist":
+            continue
+        if prefix not in ("Bookmarks", "Firefox", "Safari") and extension != "json":
             continue
         groups[prefix].append((match.group("stamp"), path))
     for backups in groups.values():
@@ -1715,11 +1729,19 @@ class SyncPreview:
     firefox_count: int = 0
     firefox_only: int = 0
     firefox_enabled: bool = False
+    safari_count: int = 0
+    safari_only: int = 0
+    safari_enabled: bool = False
 
     def render(self) -> str:
         firefox = (
             f"Firefox bookmarks: {self.firefox_count}\nFirefox-only URLs: {self.firefox_only}\n"
             if self.firefox_enabled
+            else ""
+        )
+        safari = (
+            f"Safari bookmarks: {self.safari_count}\nSafari-only URLs: {self.safari_only}\n"
+            if self.safari_enabled
             else ""
         )
         return (
@@ -1730,11 +1752,13 @@ class SyncPreview:
             f"Chrome-only URLs: {self.chrome_only}\n"
             f"Edge-only URLs: {self.edge_only}\n"
             f"{firefox}"
+            f"{safari}"
             f"Duplicates already in inputs: {self.input_duplicates}\n"
             f"Duplicates removed: {self.duplicates_removed}\n"
             f"Folders added: {self.folders_added}\n"
             f"Folders reordered: {self.folders_reordered}\n"
             f"Final bookmark count: {self.merged_count}"
+            + ("\nSafari access is read-only. Safari bookmarks may be synchronized through iCloud." if self.safari_enabled else "")
         )
 
 
@@ -2546,6 +2570,7 @@ def backup_member(path: Path) -> tuple[str, str] | None:
         "Chrome": "json",
         "Edge": "json",
         "Firefox": "sqlite",
+        "Safari": "plist",
         "Bookmarks": "html",
         "Manifest": "json",
     }
@@ -2587,6 +2612,8 @@ def summarize_backup_artifact(browser: str, path: Path) -> BackupArtifactSummary
     try:
         if browser == "Firefox":
             data = read_firefox_database(path, immutable=True)
+        elif browser == "Safari":
+            data = read_safari_bookmarks(path)
         else:
             data = json.loads(path.read_text(encoding="utf-8"))
             validate_chromium_bookmark_schema(data)
@@ -2615,13 +2642,13 @@ def catalog_backup_sets(directory: Path) -> BackupCatalog:
     for stamp, members in sorted(grouped.items(), reverse=True):
         manifest = members.get("Manifest", directory / f"Manifest_{stamp}.json")
         manifest_status, referenced = catalog_manifest(manifest, stamp)
-        expected = required | ({"Firefox"} if "Firefox" in referenced else set())
+        expected = required | ({"Firefox"} if "Firefox" in referenced else set()) | ({"Safari"} if "Safari" in referenced else set())
         present = set(members)
         missing = tuple(sorted(expected - present))
         extra = tuple(sorted((present - {"Manifest"}) - referenced)) if manifest_status != "missing" else ()
         artifacts = tuple(
             summarize_backup_artifact(browser, members[browser])
-            for browser in ("Chrome", "Edge", "Firefox")
+            for browser in ("Chrome", "Edge", "Firefox", "Safari")
             if browser in members
         )
         summaries.append(
@@ -2650,6 +2677,7 @@ def prepare_merged_data(
     duplicate_mode: str = "conservative",
     merge_strategy: str = "chrome-wins",
     firefox: dict[str, Any] | None = None,
+    safari: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], SyncPreview]:
     if merge_strategy not in MERGE_STRATEGIES:
         raise RuntimeError(f"Merge strategy must be one of: {', '.join(MERGE_STRATEGIES)}")
@@ -2663,6 +2691,12 @@ def prepare_merged_data(
         else []
     )
     firefox_keys = set(firefox_urls)
+    safari_urls = (
+        [normalized_url(node["url"], duplicate_mode) for root in safari.get("roots", {}).values() for node in iter_urls(root)]
+        if safari is not None
+        else []
+    )
+    safari_keys = set(safari_urls)
 
     if merge_strategy == "edge-wins":
         primary, secondary = edge, chrome
@@ -2692,6 +2726,14 @@ def prepare_merged_data(
             wrapper_name="Imported from Firefox",
             merge_matching_folders=merge_folders,
         )
+    if safari is not None:
+        merged, _ = merge_bookmarks(
+            merged,
+            safari,
+            duplicate_mode=duplicate_mode,
+            wrapper_name="Imported from Safari",
+            merge_matching_folders=merge_folders,
+        )
     duplicates_removed = deduplicate_bookmarks(merged, duplicate_mode) if deduplicate else 0
     folders_reordered = alphabetize_bookmarks(merged) if alphabetize else 0
     preview = SyncPreview(
@@ -2703,6 +2745,7 @@ def prepare_merged_data(
             (len(chrome_urls) - len(chrome_keys))
             + (len(edge_urls) - len(edge_keys))
             + (len(firefox_urls) - len(firefox_keys))
+            + (len(safari_urls) - len(safari_keys))
         ),
         duplicates_removed=duplicates_removed,
         merged_count=count_bookmarks(merged),
@@ -2713,6 +2756,9 @@ def prepare_merged_data(
         firefox_count=len(firefox_urls),
         firefox_only=len(firefox_keys - chrome_keys - edge_keys),
         firefox_enabled=firefox is not None,
+        safari_count=len(safari_urls),
+        safari_only=len(safari_keys - chrome_keys - edge_keys - firefox_keys),
+        safari_enabled=safari is not None,
     )
     return merged, preview
 
@@ -2725,6 +2771,7 @@ def preview_synchronization(
     duplicate_mode: str = "conservative",
     merge_strategy: str = "chrome-wins",
     firefox_profile: Path | None = None,
+    safari_bookmarks: Path | None = None,
 ) -> SyncPreview:
     _, preview = preview_synchronization_data(
         chrome_profile,
@@ -2734,6 +2781,7 @@ def preview_synchronization(
         duplicate_mode=duplicate_mode,
         merge_strategy=merge_strategy,
         firefox_profile=firefox_profile,
+        safari_bookmarks=safari_bookmarks,
     )
     return preview
 
@@ -2746,6 +2794,7 @@ def preview_synchronization_data(
     duplicate_mode: str = "conservative",
     merge_strategy: str = "chrome-wins",
     firefox_profile: Path | None = None,
+    safari_bookmarks: Path | None = None,
 ) -> tuple[dict[str, Any], SyncPreview]:
     return prepare_merged_data(
         read_bookmarks(chrome_profile),
@@ -2755,6 +2804,7 @@ def preview_synchronization_data(
         duplicate_mode=duplicate_mode,
         merge_strategy=merge_strategy,
         firefox=read_firefox_bookmarks(firefox_profile) if firefox_profile else None,
+        safari=read_safari_bookmarks(safari_bookmarks) if safari_bookmarks else None,
     )
 
 
@@ -2791,6 +2841,7 @@ def synchronize(
     verbose: bool = False,
     firefox_profile: Path | None = None,
     firefox_export: bool = False,
+    safari_bookmarks: Path | None = None,
 ) -> SyncResult:
     if not 1 <= keep <= MAX_BACKUPS:
         raise RuntimeError(f"Backup retention must be from 1 to {MAX_BACKUPS}.")
@@ -2805,11 +2856,15 @@ def synchronize(
     chrome_backup = backup_dir / f"Chrome_{stamp}.json"
     edge_backup = backup_dir / f"Edge_{stamp}.json"
     firefox_backup = backup_dir / f"Firefox_{stamp}.sqlite" if firefox_profile else None
+    safari_backup = backup_dir / f"Safari_{stamp}.plist" if safari_bookmarks else None
     shutil.copy2(chrome_profile / "Bookmarks", chrome_backup)
     shutil.copy2(edge_profile / "Bookmarks", edge_backup)
     if firefox_profile and firefox_backup:
         backup_firefox_database(firefox_profile, firefox_backup)
+    if safari_bookmarks and safari_backup:
+        backup_safari_bookmarks(safari_bookmarks, safari_backup)
     firefox = read_firefox_database(firefox_backup) if firefox_backup else None
+    safari = read_safari_bookmarks(safari_backup) if safari_backup else None
 
     merged, preview = prepare_merged_data(
         chrome,
@@ -2819,12 +2874,15 @@ def synchronize(
         duplicate_mode=duplicate_mode,
         merge_strategy=merge_strategy,
         firefox=firefox,
+        safari=safari,
     )
     html_path = backup_dir / f"Bookmarks_{stamp}.html"
     merged_count = export_html(merged, html_path)
     backup_files = [chrome_backup, edge_backup]
     if firefox_backup:
         backup_files.append(firefox_backup)
+    if safari_backup:
+        backup_files.append(safari_backup)
     backup_files.append(html_path)
     manifest_path = write_backup_manifest(
         backup_dir / f"Manifest_{stamp}.json",
@@ -2840,6 +2898,8 @@ def synchronize(
     }
     if preview.firefox_enabled:
         log_details["firefox_count"] = preview.firefox_count
+    if preview.safari_enabled:
+        log_details["safari_count"] = preview.safari_count
     write_privacy_safe_log(log_path, "backup_export_complete", **log_details)
     prune_backups(backup_dir, keep)
     closed_processes: tuple[str, ...] = ()
@@ -3444,6 +3504,8 @@ class App(ttk.Frame):
         self.firefox = tk.StringVar()
         self.firefox_enabled = tk.BooleanVar(value=False)
         self.firefox_export = tk.BooleanVar(value=False)
+        self.safari = tk.StringVar()
+        self.safari_enabled = tk.BooleanVar(value=False)
         self.backups = tk.StringVar(value=str(default_backup_dir()))
         self.keep = tk.IntVar(value=MAX_BACKUPS)
         self.deduplicate = tk.BooleanVar(value=False)
@@ -3462,43 +3524,45 @@ class App(ttk.Frame):
         self.chrome_box = self._profile_row(2, "Chrome profile", self.chrome)
         self.edge_box = self._profile_row(3, "Edge profile", self.edge)
         self.firefox_box = self._profile_row(4, "Firefox profile", self.firefox)
-        ttk.Label(self, text="Backup folder").grid(row=5, column=0, sticky="w", pady=8)
-        ttk.Entry(self, textvariable=self.backups).grid(row=5, column=1, sticky="ew", padx=10)
-        ttk.Button(self, text="Browse…", command=self._browse).grid(row=5, column=2)
-        ttk.Label(self, text="Backup sets to keep").grid(row=6, column=0, sticky="w", pady=8)
-        ttk.Spinbox(self, from_=1, to=MAX_BACKUPS, textvariable=self.keep, width=8).grid(row=6, column=1, sticky="w", padx=10)
+        self.safari_box = self._profile_row(5, "Safari bookmarks (read-only)", self.safari)
+        ttk.Label(self, text="Backup folder").grid(row=6, column=0, sticky="w", pady=8)
+        ttk.Entry(self, textvariable=self.backups).grid(row=6, column=1, sticky="ew", padx=10)
+        ttk.Button(self, text="Browse…", command=self._browse).grid(row=6, column=2)
+        ttk.Label(self, text="Backup sets to keep").grid(row=7, column=0, sticky="w", pady=8)
+        ttk.Spinbox(self, from_=1, to=MAX_BACKUPS, textvariable=self.keep, width=8).grid(row=7, column=1, sticky="w", padx=10)
         options = ttk.Frame(self)
-        options.grid(row=7, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        options.grid(row=8, column=0, columnspan=3, sticky="w", pady=(8, 0))
         ttk.Checkbutton(options, text="Remove duplicate bookmarks", variable=self.deduplicate).pack(side="left")
         ttk.Checkbutton(options, text="Alphabetize bookmarks", variable=self.alphabetize).pack(side="left", padx=16)
         ttk.Checkbutton(options, text="Include Firefox", variable=self.firefox_enabled).pack(side="left")
         ttk.Checkbutton(options, text="Write to Firefox", variable=self.firefox_export).pack(side="left", padx=16)
-        ttk.Label(self, text="Duplicate matching").grid(row=8, column=0, sticky="w", pady=8)
+        ttk.Checkbutton(options, text="Include Safari (read-only)", variable=self.safari_enabled).pack(side="left")
+        ttk.Label(self, text="Duplicate matching").grid(row=9, column=0, sticky="w", pady=8)
         ttk.Combobox(
             self,
             textvariable=self.duplicate_mode,
             values=DUPLICATE_MODES,
             state="readonly",
             width=20,
-        ).grid(row=8, column=1, sticky="w", padx=10)
-        ttk.Label(self, text="Merge strategy").grid(row=9, column=0, sticky="w", pady=8)
+        ).grid(row=9, column=1, sticky="w", padx=10)
+        ttk.Label(self, text="Merge strategy").grid(row=10, column=0, sticky="w", pady=8)
         ttk.Combobox(
             self,
             textvariable=self.merge_strategy,
             values=MERGE_STRATEGIES,
             state="readonly",
             width=24,
-        ).grid(row=9, column=1, sticky="w", padx=10)
-        note = "Close every browser selected for writing. Raw Chrome and Edge files and an enabled Firefox database are backed up before changes."
-        ttk.Label(self, text=note, wraplength=760, foreground="#8a4b08").grid(row=10, column=0, columnspan=3, sticky="w", pady=(18, 12))
+        ).grid(row=10, column=1, sticky="w", padx=10)
+        note = "Safari is read-only and may sync through iCloud. Close every browser selected for writing. Raw inputs are backed up before changes."
+        ttk.Label(self, text=note, wraplength=760, foreground="#8a4b08").grid(row=11, column=0, columnspan=3, sticky="w", pady=(18, 12))
         buttons = ttk.Frame(self)
-        buttons.grid(row=11, column=0, columnspan=3, sticky="ew")
+        buttons.grid(row=12, column=0, columnspan=3, sticky="ew")
         ttk.Button(buttons, text="Preview Changes", command=self._preview).pack(side="left")
         ttk.Button(buttons, text="Back Up + Export HTML", command=lambda: self._run(False)).pack(side="left")
         ttk.Button(buttons, text="Back Up + Sync", command=lambda: self._run(True)).pack(side="left", padx=8)
         ttk.Button(buttons, text="Open Backup Folder", command=self._open_backups).pack(side="left")
         management = ttk.Frame(self)
-        management.grid(row=12, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        management.grid(row=13, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         ttk.Button(management, text="Verify Backup", command=self._verify_backup).pack(side="left")
         ttk.Button(management, text="Restore Chrome", command=lambda: self._restore("Chrome")).pack(side="left", padx=8)
         ttk.Button(management, text="Restore Edge", command=lambda: self._restore("Edge")).pack(side="left")
@@ -3506,7 +3570,7 @@ class App(ttk.Frame):
         ttk.Button(management, text="Save Profile Mapping", command=self._save_mapping).pack(side="left")
         ttk.Button(management, text="Load Profile Mapping", command=self._load_mapping).pack(side="left", padx=8)
         catalog = ttk.Frame(self)
-        catalog.grid(row=13, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        catalog.grid(row=14, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         ttk.Button(catalog, text="Catalog Backups", command=self._catalog_backups).pack(side="left")
         ttk.Label(catalog, text="Filter").pack(side="left", padx=(12, 6))
         ttk.Combobox(
@@ -3517,8 +3581,8 @@ class App(ttk.Frame):
             width=12,
         ).pack(side="left")
         ttk.Label(catalog, text="Count changes use the previous complete, valid set.").pack(side="left", padx=12)
-        ttk.Separator(self).grid(row=14, column=0, columnspan=3, sticky="ew", pady=18)
-        ttk.Label(self, textvariable=self.status, wraplength=840).grid(row=15, column=0, columnspan=3, sticky="w")
+        ttk.Separator(self).grid(row=15, column=0, columnspan=3, sticky="ew", pady=18)
+        ttk.Label(self, textvariable=self.status, wraplength=840).grid(row=16, column=0, columnspan=3, sticky="w")
         self.pack(fill="both", expand=True)
 
     def _profile_row(self, row: int, label: str, variable: tk.StringVar) -> ttk.Combobox:
@@ -3548,6 +3612,10 @@ class App(ttk.Frame):
             self.status.set(
                 f"Detected {len(chrome)} Chrome, {len(edge)} Edge, and {len(firefox)} Firefox profile(s). Firefox remains disabled until selected."
             )
+            safari = discover_safari_bookmarks() if is_macos() else None
+            self.safari_box["values"] = [str(safari)] if safari else []
+            if safari:
+                self.safari.set(str(safari))
         except Exception as exc:
             self.status.set(
                 f"Detected {len(chrome)} Chrome and {len(edge)} Edge profile(s). Firefox remains disabled. {exc}"
@@ -3565,11 +3633,17 @@ class App(ttk.Frame):
         firefox_enabled = bool(getattr(self, "firefox_enabled", None) and self.firefox_enabled.get())
         firefox_export = bool(getattr(self, "firefox_export", None) and self.firefox_export.get())
         firefox_profile = Path(self.firefox.get()) if firefox_enabled and self.firefox.get() else None
+        safari_enabled = bool(getattr(self, "safari_enabled", None) and self.safari_enabled.get())
+        safari_value = self.safari.get() if getattr(self, "safari", None) else ""
+        safari_bookmarks = Path(safari_value) if safari_enabled and safari_value else None
         if firefox_enabled and firefox_profile is None:
             messagebox.showerror(APP_NAME, "A Firefox profile is required when Firefox support is enabled.")
             return
         if firefox_export and not firefox_enabled:
             messagebox.showerror(APP_NAME, "Enable Firefox before selecting Write to Firefox.")
+            return
+        if safari_enabled and safari_bookmarks is None:
+            messagebox.showerror(APP_NAME, "Safari bookmarks are required when Safari support is enabled.")
             return
         browser_names = "Chrome, Edge, and Firefox" if firefox_export else "Chrome and Edge"
         if write and not messagebox.askyesno(APP_NAME, f"Are {browser_names} completely closed?\n\nBookmark data will be synchronized after backups are created."):
@@ -3581,6 +3655,7 @@ class App(ttk.Frame):
                 Path(self.backups.get()),
                 firefox_profile=firefox_profile,
                 firefox_export=firefox_export,
+                safari_bookmarks=safari_bookmarks,
                 keep=self.keep.get(),
                 write=write,
                 deduplicate=self.deduplicate.get(),
@@ -3606,6 +3681,7 @@ class App(ttk.Frame):
             return
         firefox_enabled = bool(getattr(self, "firefox_enabled", None) and self.firefox_enabled.get())
         firefox_profile = Path(self.firefox.get()) if firefox_enabled and self.firefox.get() else None
+        safari_bookmarks = Path(self.safari.get()) if self.safari_enabled.get() and self.safari.get() else None
         if firefox_enabled and firefox_profile is None:
             messagebox.showerror(APP_NAME, "A Firefox profile is required when Firefox support is enabled.")
             return
@@ -3618,6 +3694,7 @@ class App(ttk.Frame):
                 duplicate_mode=self.duplicate_mode.get(),
                 merge_strategy=self.merge_strategy.get(),
                 firefox_profile=firefox_profile,
+                safari_bookmarks=safari_bookmarks,
             )
             messagebox.showinfo(f"{APP_NAME} Preview", preview.render())
         except Exception as exc:
@@ -3645,7 +3722,7 @@ class App(ttk.Frame):
         selected = filedialog.askopenfilename(
             initialdir=self.backups.get(),
             title="Select recovery snapshot to verify",
-            filetypes=[("Recovery snapshots", "*.json *.sqlite")],
+            filetypes=[("Recovery snapshots", "*.json *.sqlite *.plist")],
         )
         if not selected:
             return
@@ -3802,6 +3879,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--chrome-profile", type=Path)
     parser.add_argument("--edge-profile", type=Path)
     parser.add_argument("--firefox-profile", type=Path, help="Explicit Firefox profile to import")
+    parser.add_argument("--safari-bookmarks", type=Path, help="Explicit Safari Bookmarks.plist to import read-only")
+    parser.add_argument(
+        "--enable-safari",
+        action="store_true",
+        help="Discover and import standard macOS Safari bookmarks read-only",
+    )
     parser.add_argument(
         "--enable-firefox",
         action="store_true",
@@ -3894,6 +3977,8 @@ def main(argv: list[str] | None = None) -> int:
             args.chrome_profile,
             args.edge_profile,
             args.firefox_profile,
+            args.safari_bookmarks,
+            args.enable_safari,
             args.enable_firefox,
             args.firefox_export,
             args.profile_map,
@@ -4077,6 +4162,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
+        safari_enabled = args.enable_safari or args.safari_bookmarks is not None
+        if safari_enabled and not is_macos():
+            raise RuntimeError("Safari bookmark support is available only on macOS.")
+        safari_bookmarks = args.safari_bookmarks
+        if args.enable_safari and safari_bookmarks is None:
+            safari_bookmarks = discover_safari_bookmarks()
+            if safari_bookmarks is None:
+                raise RuntimeError("Safari bookmarks were not found at the standard macOS location.")
         firefox_enabled = args.enable_firefox or args.firefox_profile is not None
         if args.firefox_export and (
             not firefox_enabled
@@ -4200,6 +4293,7 @@ def main(argv: list[str] | None = None) -> int:
                     duplicate_mode=args.duplicate_mode,
                     merge_strategy=args.merge_strategy,
                     firefox_profile=mapping.firefox_profile if firefox_enabled else None,
+                    safari_bookmarks=safari_bookmarks,
                 )
             except RuntimeError as exc:
                 print(f"Error: {exc}", file=sys.stderr)
@@ -4222,6 +4316,7 @@ def main(argv: list[str] | None = None) -> int:
                     mapping.backup_dir,
                     firefox_profile=mapping.firefox_profile if firefox_enabled else None,
                     firefox_export=args.firefox_export,
+                    safari_bookmarks=safari_bookmarks,
                     keep=args.keep,
                     write=args.sync,
                     deduplicate=args.deduplicate,

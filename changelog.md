@@ -8,6 +8,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
+- Added the read-only phase of `FUT-011`: macOS Safari bookmark discovery, validated plist backups in SHA-256 manifests, bookmark-only parsing with Reading List exclusion, merge planning, duplicate handling, organization, portable HTML export, and GUI/CLI controls.
+- Added fail-closed Safari schema handling, iCloud synchronization warnings, privacy-safe count-only output, Safari backup catalog/verification support, and regression coverage without any Safari write path.
+
 - Added isolated, count-only verification of Firefox SQLite recovery snapshots with manifest hashes, SQLite integrity, supported Places schema, and required-root validation.
 - Added GUI and CLI Firefox restore with platform-native process blocking, consistent preservation of the current database, staged replacement, stale WAL and shared-memory cleanup, and rollback-safe failure handling.
 - Added corrupt, mismatched, unsupported-schema, running-process, replacement-failure, sidecar, GUI, CLI, physical-macOS copied-profile, and physical Windows 11 coverage for completed `FUT-018`.
