@@ -15,7 +15,7 @@ Version: 0.3.0
 
 Release readiness: Source ready; trusted signing credential required for binary release
 
-The GUI, CLI, standalone build, automated tests, transactional writes, dry-run reporting, read-only backup-set catalog and comparison, non-destructive backup verification, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The current `main` branch passes Windows CI and CodeQL. Release automation fails closed unless a trusted provider signs and timestamps the executable, the workflow verifies the expected publisher and signature, and checksums, a CycloneDX SBOM, and GitHub provenance are published. The project is applying to the SignPath Foundation open-source program; the existing Azure-based workflow remains unchanged until SignPath approves the project and provides the required integration settings. No signing provider is currently configured, so broad binary distribution remains blocked. Native macOS Chrome and Edge compatibility and later Safari support are separate future upgrades and are not currently implemented.
+The GUI, CLI, standalone build, automated tests, transactional writes, machine-readable dry-run reporting, read-only backup-set catalog and comparison, non-destructive backup verification, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The current `main` branch passes Windows CI and CodeQL. Release automation fails closed unless a trusted provider signs and timestamps the executable, the workflow verifies the expected publisher and signature, and checksums, a CycloneDX SBOM, and GitHub provenance are published. The project is applying to the SignPath Foundation open-source program; the existing Azure-based workflow remains unchanged until SignPath approves the project and provides the required integration settings. No signing provider is currently configured, so broad binary distribution remains blocked. Native macOS Chrome and Edge compatibility and later Safari support are separate future upgrades and are not currently implemented.
 
 - [Current assessment](assessment.md)
 - [Changelog](changelog.md)
@@ -51,6 +51,7 @@ The GUI, CLI, standalone build, automated tests, transactional writes, dry-run r
 - Validates that the merged bookmark collection contains no duplicate GUID values.
 - Uses conservative URL matching by default and keeps aggressive matching opt-in.
 - Provides five merge strategies and a no-write dry-run report.
+- Writes optional atomic JSON or CSV dry-run reports with settings, counts, and change categories while excluding bookmark details by default.
 - Verifies JSON recovery snapshots in a temporary Chromium profile without changing live browser files.
 - Restores Chrome or Edge independently from raw JSON recovery snapshots.
 - Saves and loads private named profile mappings and processes several mappings from the CLI.
@@ -320,6 +321,22 @@ py .\browser_bookmark_sync.py `
 
 Run this before aggressive duplicate matching, a new merge strategy, or a first synchronization.
 
+Save the same preview as a privacy-safe JSON or CSV report:
+
+```powershell
+py .\browser_bookmark_sync.py `
+  --dry-run `
+  --preview-report "D:\Private\browser-bookmark-preview.json" `
+  --chrome-profile "$env:LOCALAPPDATA\Google\Chrome\User Data\Default" `
+  --edge-profile "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default"
+```
+
+The extension selects the format. JSON uses a versioned `preview-report` document with one entry per selected mapping. CSV uses `mapping`, `category`, `metric`, and `value` rows. Default reports contain merge settings, browser and final counts, URL change categories, duplicate counts, and folder changes. They exclude browser-profile paths, bookmark names, URLs, and folder paths.
+
+Add `--include-bookmark-details` only when the private report must include merged bookmark names, URLs, and folder paths. Detailed reports can expose browsing history, internal sites, tokens embedded in URLs, and account information. Store every preview report outside the repository. Standard `browser-bookmark-preview*.json` and `.csv` names are ignored as a secondary safeguard.
+
+Report generation reads the selected profiles and atomically creates or replaces only the requested report. It rejects destinations inside selected browser profiles and does not create backups, HTML exports, manifests, logs, or scheduler results. It never synchronizes browser files or invokes backup pruning. If any selected mapping fails, no report is written.
+
 ### Include Firefox
 
 Firefox stays disabled unless an explicit profile is supplied. This command imports Firefox into the merged union and writes Chrome and Edge only:
@@ -483,7 +500,9 @@ Backups and the HTML export are created before process termination. The command 
 | --- | --- | --- |
 | `--gui` | No | Opens the desktop interface. |
 | `--sync` | No | Writes the merged bookmarks to Chrome and Edge. Without it, the run only backs up and exports. |
-| `--dry-run` | No | Reports planned counts and folder changes without creating or changing files. |
+| `--dry-run` | No | Reports planned counts and folder changes without changing browser or backup files. |
+| `--preview-report` | Dry run report | Writes all selected mapping previews to a `.json` or `.csv` file; requires `--dry-run`. |
+| `--include-bookmark-details` | No | Explicitly includes private bookmark names, URLs, and folder paths in `--preview-report`. |
 | `--check-automation` | AI or local scheduling | Validates a private automation configuration without creating backups or changing browser files. |
 | `--run-automation` | AI or local scheduling | Executes a private automation configuration under a concurrency lock and writes a privacy-safe JSON result. |
 | `--verify-backup` | Backup verification | Raw JSON recovery snapshot to validate without changing browser files. |
@@ -570,6 +589,7 @@ Do not restore a Chrome backup into Edge or an Edge backup into Chrome unless yo
 - Deletions are intentionally not synchronized.
 - Duplicate removal and alphabetization are disabled by default.
 - Direct restore requires JSON recovery snapshots. HTML restore uses the browser's import function.
+- Preview reports are CLI-only. Detailed reports are private data and must not be committed or attached to public issues.
 - Task Scheduler support generates a reviewed PowerShell registration script. It does not silently register tasks.
 - Cloud-hosted AI agents cannot access browser profiles on the local Windows computer. Scheduled browser operations require a local scheduler or a tightly controlled self-hosted Windows runner using the same Windows account.
 - The standalone executable is Windows-only and is built as a console-capable application so CLI output remains available.
@@ -627,7 +647,7 @@ The repository Actions allowlist still requires full commit SHA pinning. It perm
 
 The project is applying for SignPath Foundation service as a no-cost alternative. Do not add SignPath credentials, actions, or signing steps until the application is approved and SignPath supplies the project configuration. If accepted, replace the Azure-specific signing step in a reviewed pull request while preserving tag validation, manual signing approval, version-metadata enforcement, signature and timestamp checks, checksums, SBOM generation, provenance, and fail-closed publication. Update the repository Actions allowlist only for exact reviewed and full-SHA-pinned dependencies required by that integration.
 
-The current test suite contains 100 passing cases covering conservative and aggressive cross-browser URL matching, explicit Firefox profile discovery, Firefox Places import and export, Firefox backup ordering and manifests, three-browser rollback, disabled-mode isolation, five merge strategies, dry-run reporting, named multi-profile execution, read-only backup catalog and comparison, non-destructive backup verification, restore safety, Chromium schema checks, duplicate GUID rejection, SHA-256 manifests, manifest mismatch and path validation, privacy-safe logging, Task Scheduler generation, scheduler configuration, readiness, locking, structured results, health history, notification controls, organization, retention, transaction and process controls, CLI behavior, and GUI errors.
+The current test suite contains 104 passing cases covering conservative and aggressive cross-browser URL matching, explicit Firefox profile discovery, Firefox Places import and export, Firefox backup ordering and manifests, three-browser rollback, disabled-mode isolation, five merge strategies, privacy-safe JSON and CSV dry-run reports, named multi-profile execution, read-only backup catalog and comparison, non-destructive backup verification, restore safety, Chromium schema checks, duplicate GUID rejection, SHA-256 manifests, manifest mismatch and path validation, privacy-safe logging, Task Scheduler generation, scheduler configuration, readiness, locking, structured results, health history, notification controls, organization, retention, transaction and process controls, CLI behavior, and GUI errors.
 
 ## Contributing and support
 

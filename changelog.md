@@ -8,6 +8,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
+- Added versioned JSON and row-oriented CSV output for direct and multi-mapping dry runs through `--preview-report`.
+- Added explicit `--include-bookmark-details` opt-in for merged bookmark names, URLs, and folder paths while keeping default reports limited to settings, counts, and change categories.
+- Added regression coverage for JSON and CSV schemas, default privacy, explicit details, multi-mapping aggregation, unsafe destinations, unsupported extensions, option dependencies, browser-file preservation, and backup-pruning isolation.
+- Added `FUT-020` preview report comparison and policy gates as the replacement candidate for completed `FUT-004`.
 - Added a read-only GUI and CLI backup catalog with generated-timestamp grouping, complete, incomplete, valid, and invalid filters, manifest status, browser-specific bookmark and folder counts, and deltas from the previous complete and valid set.
 - Added explicit count-only comparison for two complete, valid backup sets through `--compare-backups`.
 - Added regression coverage for complete sets, missing and extra members, manifest mismatches, unrelated files and directories, CLI and GUI reporting, and exact no-change backup-directory verification.
@@ -52,6 +56,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Security
 
+- Rejected preview report destinations inside selected browser profiles and excluded standard private JSON and CSV preview report names from Git.
 - Used SQLite immutable mode for Firefox catalog inspection so read-only inventory cannot create WAL or shared-memory sidecars beside recovery snapshots.
 - Enforced Windows ProductName, ProductVersion, FileDescription, and OriginalFilename metadata in release builds and included the code-signing and privacy policies in release archives.
 - Documented that SignPath approval is pending, unsigned artifacts are not public releases, and provider-specific integration must not be added before configuration is reviewed.

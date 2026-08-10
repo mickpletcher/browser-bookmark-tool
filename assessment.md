@@ -6,19 +6,19 @@ Release readiness: Source ready; trusted signing credential required for binary 
 
 ## Summary
 
-The project is a Windows application for previewing, backing up, exporting, cataloging, comparing, verifying, restoring, and organizing Chrome bookmarks and Microsoft Edge favorites, with disabled-by-default Firefox import and export. Version 0.3.0 combines transactional write and browser-process protections with read-only backup-set inventory, isolated backup verification, a vendor-neutral local execution contract, capped privacy-safe health history, optional rate-limited failure notifications, and fail-closed signed release automation. SignPath Foundation application readiness includes a public code-signing policy, privacy policy, explicit solo-maintainer roles, manual approval requirements, and enforced Windows release metadata. A trusted provider and verified signing integration are still required before the first binary release can be published.
+The project is a Windows application for previewing, reporting, backing up, exporting, cataloging, comparing, verifying, restoring, and organizing Chrome bookmarks and Microsoft Edge favorites, with disabled-by-default Firefox import and export. Version 0.3.0 combines transactional write and browser-process protections with privacy-safe machine-readable previews, read-only backup-set inventory, isolated backup verification, a vendor-neutral local execution contract, capped privacy-safe health history, optional rate-limited failure notifications, and fail-closed signed release automation. SignPath Foundation application readiness includes a public code-signing policy, privacy policy, explicit solo-maintainer roles, manual approval requirements, and enforced Windows release metadata. A trusted provider and verified signing integration are still required before the first binary release can be published.
 
 ## Current status
 
 | Area | Status | Notes |
 | --- | --- | --- |
 | Packaging | Ready | Editable installation, module execution, and the batch launcher command path pass verification. |
-| Automated tests | Passing | All 100 test cases pass on Python 3.13.3 across Firefox discovery, Places import and export, cross-browser matching, backup ordering, manifests, disabled-mode isolation, three-browser rollback, merge, preview, mapping, backup catalog and comparison, backup verification, restore, integrity, logging, scheduling, automation, transaction, process, CLI, and GUI paths. |
+| Automated tests | Passing | All 104 test cases pass on Python 3.13.3 across Firefox discovery, Places import and export, cross-browser matching, backup ordering, manifests, disabled-mode isolation, three-browser rollback, merge, machine-readable preview reports, mapping, backup catalog and comparison, backup verification, restore, integrity, logging, scheduling, automation, transaction, process, CLI, and GUI paths. |
 | Backup safety | Ready | Every run creates HTML and Chromium JSON backups plus a validated SHA-256 manifest. Enabled Firefox runs add a consistent SQLite backup before checkpoint or replacement. GUI and CLI cataloging groups and compares generated sets without changing them, while verification currently covers Chromium JSON snapshots. |
 | Synchronization safety | Ready | Chrome and Edge replacements are prepared and validated before writes. Firefox export stages and validates SQLite from its backup. Edge failure restores Chrome, and Firefox replacement failure restores both Chromium files. |
 | Bookmark organization | Ready | Duplicate removal and recursive folder-first alphabetization are independently optional in the GUI and CLI. |
 | URL matching | Ready | Conservative matching changes only scheme and host case. Aggressive whole-URL matching and trailing-slash collapse require explicit opt-in. |
-| Merge and preview | Ready | Five strategies are available, and GUI or CLI dry-run reports make no filesystem or browser changes. |
+| Merge and preview | Ready | Five strategies are available. GUI and CLI dry runs make no browser or backup changes. CLI dry runs can atomically create a requested JSON or CSV report, with private bookmark details excluded by default and browser-profile destinations rejected. |
 | Restore | Ready | Chrome and Edge can be restored independently from validated JSON snapshots after preserving the current file. HTML remains a browser-import format. |
 | Multi-profile support | Ready | Private named mapping files separate work and personal profiles; optional Firefox paths are ignored unless explicitly enabled. CLI runs one, several, or all mappings. |
 | Integrity and logging | Ready | Manifests validate SHA-256 and size before pruning. Default logs contain operation metadata and counts but no bookmark URLs. |
@@ -28,7 +28,7 @@ The project is a Windows application for previewing, backing up, exporting, cata
 | Browser process handling | Ready | Running Chrome or Edge blocks synchronization after backups and export. Firefox is checked only when it is an enabled write target. CLI users can explicitly force-close selected process trees with `--close-browsers` or bypass detection with `--force`. |
 | Repository security | Ready | Secret scanning, push protection, Dependabot, private vulnerability reporting, CodeQL, restricted SHA-pinned Actions, and a solo-maintainer `main` ruleset are enabled. Optional non-provider patterns and validity checks are unavailable. |
 | Documentation | Ready | The README includes the repository social preview and documents current behavior, safety requirements, GUI and CLI use, installation and removal, backup restoration, limitations, download status, privacy, code-signing roles, development checks, contribution rules, support scope, and security reporting. |
-| Upgrade tracking | Good | Completed `FUT-017` is recorded with replacement candidate `FUT-019` for read-only duplicate backup-set detection. Three priority tiers still track SignPath integration, release provenance, recovery, reporting, macOS Chrome and Edge compatibility, and phased Safari support. |
+| Upgrade tracking | Good | Completed `FUT-004` is recorded with replacement candidate `FUT-020` for preview report comparison and policy gates. Three priority tiers still track SignPath integration, release provenance, recovery, reporting, macOS Chrome and Edge compatibility, and phased Safari support. |
 
 ## Strengths
 
@@ -47,7 +47,9 @@ The project is a Windows application for previewing, backing up, exporting, cata
 - Optionally removes duplicate normalized URLs while retaining the first occurrence.
 - Optionally alphabetizes folders and bookmarks recursively with folders first.
 - Preserves case-sensitive paths and query values under default duplicate matching.
-- Reports planned additions, duplicates, folder changes, and final counts without writing files.
+- Reports planned additions, duplicates, folder changes, and final counts to standard output without writing files unless a preview report path is explicitly requested.
+- Atomically writes optional versioned JSON or CSV preview reports for one or several mappings without creating backups, pruning files, or changing browser data.
+- Keeps report output count-only by default, requires an explicit option for bookmark names and URLs, and rejects destinations inside selected browser profiles.
 - Supports independent restore and private named multi-profile workflows.
 - Verifies recovery snapshots in isolated temporary profiles and reports only bookmark counts, folder counts, manifest name, and no-write status.
 - Catalogs generated backup sets without opening live profiles, distinguishes completeness from validity, flags missing or extra members, and reports only browser types and counts.
@@ -92,8 +94,8 @@ Verified on Windows 11 with Python 3.13.3 on 2026-08-08.
 - `py -m pip install -e .`: passed.
 - `py -m browser_bookmark_sync --help`: passed.
 - `Run Browser Bookmark Tool.bat --help`: passed and reached the application through the Python module.
-- `py -m pytest -q`: passed with 100 cases, including explicit Firefox discovery, Places import and export, conservative and aggressive cross-browser matching, backup-before-write ordering, Firefox manifest validation, process blocking, disabled-mode isolation, three-browser rollback, read-only backup catalog and comparison, Chromium snapshot verification, automation, CLI, and GUI paths.
-- Python 3.11.9 isolated environment: the prior 80-case baseline, Ruff, compilation, and `pip check` passed. The 100-case suite is verified on Python 3.13.3 and awaits CI matrix verification.
+- `py -m pytest -q`: passed with 104 cases, including explicit Firefox discovery, Places import and export, conservative and aggressive cross-browser matching, backup-before-write ordering, Firefox manifest validation, process blocking, disabled-mode isolation, three-browser rollback, JSON and CSV preview reports, read-only backup catalog and comparison, Chromium snapshot verification, automation, CLI, and GUI paths.
+- Python 3.11.9 isolated environment: the prior 80-case baseline, Ruff, compilation, and `pip check` passed. The 104-case suite is verified on Python 3.13.3 and awaits CI matrix verification.
 - `py -m ruff check .`: passed with Ruff 0.16.2 and an explicit project rule set.
 - `py -m py_compile browser_bookmark_sync.py test_sync.py`: passed.
 - Package wheel build: passed. The wheel contains only the application module, project metadata, console entry point, and MIT license.
@@ -122,7 +124,7 @@ Actions have read-only default workflow permissions, cannot approve pull request
 - The repository has one active ruleset and a `release` environment restricted to `v*` tags. It has no tags, releases, packages, deployments, webhooks, deploy keys, Azure signing secrets or variables, or collaborators other than the owner.
 - Repository and full-history scans found no provider credential patterns. GitHub secret scanning also reports zero open alerts.
 
-The documentation was reviewed against the current implementation and the 2026-08-08 live GitHub configuration snapshot, including optional Firefox import and export, read-only backup catalog and comparison, isolated backup verification, local AI scheduling, private configuration, structured results, health history, optional notification delivery, concurrency, repository security, Windows CI status, release metadata, SignPath application readiness, privacy, community health files, and upgrade tracking on 2026-08-09.
+The documentation was reviewed against the current implementation and the 2026-08-08 live GitHub configuration snapshot, including optional Firefox import and export, machine-readable preview reports, read-only backup catalog and comparison, isolated backup verification, local AI scheduling, private configuration, structured results, health history, optional notification delivery, concurrency, repository security, Windows CI status, release metadata, SignPath application readiness, privacy, community health files, and upgrade tracking on 2026-08-09.
 
 ## Maintenance requirement
 

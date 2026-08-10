@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 import shutil
@@ -1025,6 +1026,172 @@ def test_dry_run_creates_no_backup_or_write(tmp_path: Path, capsys: pytest.Captu
     assert edge_path.read_text() == edge_original
 
 
+def preview_report_profiles(tmp_path: Path) -> tuple[Path, Path, Path, Path, str, str]:
+    chrome = tmp_path / "Chrome" / "Default"
+    edge = tmp_path / "Edge" / "Default"
+    chrome.mkdir(parents=True)
+    edge.mkdir(parents=True)
+    chrome_path = chrome / "Bookmarks"
+    edge_path = edge / "Bookmarks"
+    chrome_data = data("https://private-chrome.test/token=secret")
+    chrome_data["roots"]["bookmark_bar"]["children"][0]["name"] = "Private Chrome Bookmark"
+    edge_data = data("https://private-edge.test/account")
+    edge_data["roots"]["bookmark_bar"]["children"][0]["name"] = "Private Edge Bookmark"
+    chrome_original = json.dumps(chrome_data)
+    edge_original = json.dumps(edge_data)
+    chrome_path.write_text(chrome_original)
+    edge_path.write_text(edge_original)
+    return chrome, edge, chrome_path, edge_path, chrome_original, edge_original
+
+
+def test_json_preview_report_defaults_to_counts_and_does_not_change_browser_or_backup_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    chrome, edge, chrome_path, edge_path, chrome_original, edge_original = preview_report_profiles(tmp_path)
+    backup_dir = tmp_path / "backups"
+    report = tmp_path / "private" / "browser-bookmark-preview.json"
+    monkeypatch.setattr(sync_module, "prune_backups", lambda *_args, **_kwargs: pytest.fail("pruning called"))
+
+    exit_code = main(
+        [
+            "--dry-run",
+            "--preview-report",
+            str(report),
+            "--chrome-profile",
+            str(chrome),
+            "--edge-profile",
+            str(edge),
+            "--backup-dir",
+            str(backup_dir),
+        ]
+    )
+    document = json.loads(report.read_text())
+    serialized = json.dumps(document)
+
+    assert exit_code == 0
+    assert document["schema_version"] == 1
+    assert document["kind"] == "preview-report"
+    assert not document["bookmark_details_included"]
+    assert document["mappings"][0]["mapping"] == "direct"
+    assert document["mappings"][0]["counts"]["final_bookmarks"] == 2
+    assert document["mappings"][0]["changes"]["chrome_only_urls"] == 1
+    assert "bookmarks" not in document["mappings"][0]
+    assert "private-chrome.test" not in serialized
+    assert "Private Chrome Bookmark" not in serialized
+    assert str(chrome) not in serialized
+    assert chrome_path.read_text() == chrome_original
+    assert edge_path.read_text() == edge_original
+    assert not backup_dir.exists()
+    assert [path.name for path in report.parent.iterdir()] == [report.name]
+
+
+def test_json_preview_report_includes_private_details_only_with_explicit_option(tmp_path: Path):
+    chrome, edge, _, _, _, _ = preview_report_profiles(tmp_path)
+    report = tmp_path / "browser-bookmark-preview-details.json"
+
+    exit_code = main(
+        [
+            "--dry-run",
+            "--preview-report",
+            str(report),
+            "--include-bookmark-details",
+            "--chrome-profile",
+            str(chrome),
+            "--edge-profile",
+            str(edge),
+        ]
+    )
+    document = json.loads(report.read_text())
+    details = document["mappings"][0]["bookmarks"]
+
+    assert exit_code == 0
+    assert document["bookmark_details_included"]
+    assert {item["name"] for item in details} == {"Private Chrome Bookmark", "Private Edge Bookmark"}
+    assert {item["url"] for item in details} == {
+        "https://private-chrome.test/token=secret",
+        "https://private-edge.test/account",
+    }
+    assert {item["folder_path"] for item in details} == {"Bookmarks bar", "Other bookmarks/Imported from other browser"}
+
+
+def test_csv_preview_reports_cover_default_and_explicit_detail_schemas(tmp_path: Path):
+    chrome, edge, _, _, _, _ = preview_report_profiles(tmp_path)
+    report = tmp_path / "browser-bookmark-preview.csv"
+
+    assert main(
+        [
+            "--dry-run",
+            "--preview-report",
+            str(report),
+            "--chrome-profile",
+            str(chrome),
+            "--edge-profile",
+            str(edge),
+        ]
+    ) == 0
+    with report.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+        fieldnames = rows[0].keys()
+    assert list(fieldnames) == ["mapping", "category", "metric", "value"]
+    assert any(row["category"] == "changes" and row["metric"] == "edge_only_urls" for row in rows)
+    assert "private-edge.test" not in report.read_text()
+
+    assert main(
+        [
+            "--dry-run",
+            "--preview-report",
+            str(report),
+            "--include-bookmark-details",
+            "--chrome-profile",
+            str(chrome),
+            "--edge-profile",
+            str(edge),
+        ]
+    ) == 0
+    with report.open(newline="", encoding="utf-8") as stream:
+        detailed_rows = list(csv.DictReader(stream))
+    assert "url" in detailed_rows[0]
+    assert any(row["category"] == "bookmark" and row["url"] == "https://private-edge.test/account" for row in detailed_rows)
+
+
+def test_preview_report_options_reject_unsafe_or_incomplete_requests(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    chrome, edge, _, _, _, _ = preview_report_profiles(tmp_path)
+    report = tmp_path / "preview.json"
+
+    assert main(["--preview-report", str(report)]) == 1
+    assert "--preview-report requires --dry-run" in capsys.readouterr().err
+    assert main(["--include-bookmark-details"]) == 1
+    assert "--include-bookmark-details requires --preview-report" in capsys.readouterr().err
+    assert main(
+        [
+            "--dry-run",
+            "--preview-report",
+            str(tmp_path / "preview.txt"),
+            "--chrome-profile",
+            str(chrome),
+            "--edge-profile",
+            str(edge),
+        ]
+    ) == 1
+    assert "must end in .json or .csv" in capsys.readouterr().err
+    assert main(
+        [
+            "--dry-run",
+            "--preview-report",
+            str(chrome / "preview.json"),
+            "--chrome-profile",
+            str(chrome),
+            "--edge-profile",
+            str(edge),
+        ]
+    ) == 1
+    assert "cannot be written inside a selected browser profile" in capsys.readouterr().err
+
+
 def test_manifest_validates_and_detects_tampering(tmp_path: Path):
     chrome = tmp_path / "Chrome" / "Default"
     edge = tmp_path / "Edge" / "Default"
@@ -1448,6 +1615,7 @@ def test_task_scheduler_rejects_invalid_time(tmp_path: Path):
 
 def test_cli_dry_run_processes_multiple_named_mappings(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
     mapping_file = tmp_path / "profile-mappings.json"
+    report_file = tmp_path / "browser-bookmark-preview.json"
     for name in ("Personal", "Work"):
         chrome = tmp_path / name / "Chrome"
         edge = tmp_path / name / "Edge"
@@ -1457,13 +1625,23 @@ def test_cli_dry_run_processes_multiple_named_mappings(tmp_path: Path, capsys: p
         (edge / "Bookmarks").write_text(json.dumps(data(f"https://{name.casefold()}-edge.test")))
         save_profile_mapping(mapping_file, ProfileMapping(name, chrome, edge, tmp_path / name / "Backups"))
 
-    exit_code = main(["--dry-run", "--profile-map", str(mapping_file)])
+    exit_code = main(
+        [
+            "--dry-run",
+            "--profile-map",
+            str(mapping_file),
+            "--preview-report",
+            str(report_file),
+        ]
+    )
     output = capsys.readouterr().out
+    report = json.loads(report_file.read_text())
 
     assert exit_code == 0
     assert "[Personal]" in output
     assert "[Work]" in output
     assert output.count("Final bookmark count: 2") == 2
+    assert [item["mapping"] for item in report["mappings"]] == ["Personal", "Work"]
 
 
 def automation_files(
