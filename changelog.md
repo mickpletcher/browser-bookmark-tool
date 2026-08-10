@@ -8,6 +8,11 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
+- Added native macOS Chrome, Edge, and Firefox profile discovery, platform-specific process safeguards, exact-name explicit closure, and platform-aware restore guards.
+- Added a portable `python3` shell launcher, backup-first `launchd` property-list generation, macOS package metadata, and a SHA-pinned macOS CI test and PyInstaller smoke-build job.
+- Added macOS regression and physical-Mac validation coverage while preserving the complete Windows suite.
+- Added `FUT-024` signed and notarized macOS distribution as the replacement candidate for completed `FUT-013`.
+
 - Added optional atomic version 1 `preview-policy-result` JSON output with input and policy hashes, expected mappings, aggregate and per-mapping counts, configured limits, violations, status, and exit code.
 - Added protected result destinations, default Git ignore coverage, detailed-report redaction, and regression coverage for pass, policy failure, schema stability, atomic replacement, and no browser or backup access.
 - Added `FUT-023` preview result catalog and trend summaries as the replacement candidate for completed `FUT-022`.

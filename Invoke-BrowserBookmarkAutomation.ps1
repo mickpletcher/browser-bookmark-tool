@@ -30,7 +30,10 @@ else {
         $arguments = @($operation, $resolvedConfig)
     }
     else {
-        $pythonLauncher = Get-Command py -ErrorAction Stop
+        $pythonLauncher = Get-Command py, python3, python -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -eq $pythonLauncher) {
+            throw 'Python 3.10 or newer is required when a current standalone executable is unavailable.'
+        }
         $program = $pythonLauncher.Source
         $arguments = @($sourceModule, $operation, $resolvedConfig)
     }

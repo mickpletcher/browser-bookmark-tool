@@ -2,10 +2,10 @@
 
 ![Browser Bookmark Tool social preview](.github/social-preview.jpg)
 
-[![Windows CI](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml)
+[![Cross-platform CI](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Browser Bookmark Tool is a Windows desktop and command-line application for backing up, exporting, and synchronizing bookmarks between Google Chrome and Microsoft Edge, with optional Firefox import and export.
+Browser Bookmark Tool is a Windows and macOS desktop and command-line application for backing up, exporting, and synchronizing bookmarks between Google Chrome and Microsoft Edge, with optional Firefox import and export.
 
 The synchronization uses a conservative union. A bookmark found in either browser is retained. Deletions are not propagated.
 
@@ -15,7 +15,7 @@ Version: 0.3.0
 
 Release readiness: Source ready; trusted signing credential required for binary release
 
-The GUI, CLI, standalone build, automated tests, transactional writes, machine-readable dry-run reporting, read-only preview-report and backup-set comparison, count-only policy gates, non-destructive backup verification, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The current `main` branch passes Windows CI and CodeQL. Release automation fails closed unless a trusted provider signs and timestamps the executable, the workflow verifies the expected publisher and signature, and checksums, a CycloneDX SBOM, and GitHub provenance are published. The project is applying to the SignPath Foundation open-source program; the existing Azure-based workflow remains unchanged until SignPath approves the project and provides the required integration settings. No signing provider is currently configured, so broad binary distribution remains blocked. Native macOS Chrome and Edge compatibility and later Safari support are separate future upgrades and are not currently implemented.
+The GUI, CLI, transactional bookmark workflow, Chrome, Edge, and optional Firefox discovery and process safeguards, shell and PowerShell entrypoints, `launchd` and Task Scheduler generation, and native PyInstaller smoke builds are implemented for Windows and macOS. The current `main` branch uses cross-platform CI and CodeQL. Windows release automation remains blocked until a trusted provider signs and timestamps the executable. macOS binaries are currently local build artifacts and are not signed or notarized. Safari remains a separate future upgrade.
 
 - [Current assessment](assessment.md)
 - [Changelog](changelog.md)
@@ -29,7 +29,7 @@ The GUI, CLI, standalone build, automated tests, transactional writes, machine-r
 
 ## Features
 
-- Detects Chrome and Edge `Default` and `Profile *` profiles and reads Firefox profiles explicitly from `%APPDATA%\Mozilla\Firefox\profiles.ini`.
+- Detects Chrome and Edge `Default` and `Profile *` profiles and parses the standard Firefox `profiles.ini` on Windows and macOS.
 - Creates timestamped copies of both original `Bookmarks` JSON files.
 - Exports the merged bookmark collection to portable Netscape bookmark HTML.
 - Synchronizes unique bookmarks between Chrome and Edge when requested.
@@ -41,7 +41,7 @@ The GUI, CLI, standalone build, automated tests, transactional writes, machine-r
 - Prepares and validates both replacement files before changing either browser.
 - Restores Chrome automatically if the Edge replacement fails.
 - Restores Chrome and Edge automatically if an enabled Firefox replacement fails.
-- Detects `chrome.exe` and `msedge.exe` before synchronization and detects `firefox.exe` when Firefox is an enabled write target.
+- Detects the platform-native Chrome and Edge processes before synchronization and Firefox when it is an enabled write target.
 - Keeps raw backups and the merged HTML export when synchronization is blocked by a running browser.
 - Optionally force-closes selected browser process trees before synchronization through the CLI.
 - Creates a portable HTML backup during every run.
@@ -60,13 +60,15 @@ The GUI, CLI, standalone build, automated tests, transactional writes, machine-r
 - Catalogs generated backup sets by timestamp, flags missing or extra members, filters by completeness or validity, and compares count-only changes between verified sets without changing files.
 - Writes count-only logs that exclude bookmark URLs by default.
 - Generates PowerShell scripts for Windows Task Scheduler with backup-only defaults.
-- Builds a standalone Windows executable with PyInstaller.
-- Runs tests and produces the executable through SHA-pinned Windows GitHub Actions.
+- Generates macOS `launchd` property lists with backup-only defaults.
+- Builds standalone Windows and macOS executables with PyInstaller.
+- Runs tests and produces native executables through SHA-pinned cross-platform GitHub Actions.
 - Validates versioned Windows release packages and requires Authenticode signing, checksums, a CycloneDX SBOM, and GitHub attestations before publication.
 - Embeds and validates Windows product name, version, description, and original-filename metadata in release executables.
 - Provides scheduler-safe configuration, readiness checks, concurrency locking, and privacy-safe JSON results for local Codex, Claude, Copilot, or deterministic schedulers.
 - Supports a Tkinter desktop interface and command-line execution.
 - Includes a Windows batch launcher that installs the project in editable mode and starts the app.
+- Includes a portable `python3` shell launcher for macOS and other Unix-like environments.
 
 ## Current synchronization behavior
 
@@ -105,7 +107,7 @@ This version does not propagate deletions. If a bookmark is deleted from one bro
 
 Close Chrome and Edge completely before synchronization. Also close Firefox when Firefox export is enabled. Include background browser processes. An open browser can overwrite synchronized data when it exits.
 
-Before writing, the tool checks the Windows process list for `chrome.exe` and `msedge.exe`. It also checks `firefox.exe` only when Firefox export is enabled. A detected target browser blocks synchronization. Firefox import-only and disabled runs do not add a Firefox process requirement.
+Before writing, the tool checks `chrome.exe` and `msedge.exe` on Windows or `Google Chrome` and `Microsoft Edge` on macOS. It checks `firefox.exe` on Windows or `firefox` on macOS only when Firefox export is enabled. A detected target browser blocks synchronization. Firefox import-only and disabled runs do not add a Firefox process requirement.
 
 Process detection occurs after the raw backups and merged HTML export are created. A blocked synchronization therefore leaves both browser files unchanged while keeping the backup and export results. Backup-only and export-only runs do not check browser processes and remain available while either browser is open.
 
@@ -115,7 +117,7 @@ Chrome is replaced first. If that replacement fails, Edge remains unchanged. If 
 
 The CLI-only `--force` option bypasses browser process detection. Use it only after independently confirming that every write target is completely closed. It does not close browsers or prevent an open browser from overwriting synchronized data.
 
-The CLI-only `--close-browsers` option takes the opposite approach. After backups and the HTML export are created, it force-terminates detected target process trees using Windows `taskkill /T /F`. It includes `firefox.exe` only when Firefox export is enabled and verifies all selected write targets stopped before writing.
+The CLI-only `--close-browsers` option takes the opposite approach. After backups and the HTML export are created, it force-terminates detected targets using Windows `taskkill /T /F` or exact executable-name `pkill` on macOS. It includes Firefox only when Firefox export is enabled and verifies all selected write targets stopped before writing.
 
 Force-closing browsers can discard unsaved form entries, downloads, private-window state, and other active work. Use `--close-browsers` only when that loss is acceptable. It cannot be combined with `--force`.
 
@@ -123,9 +125,9 @@ Use **Back Up + Export HTML** first if you want to inspect the merged result wit
 
 ## Requirements
 
-- Windows 11 or another supported Windows version.
-- Python 3.10 or newer from [python.org](https://www.python.org/downloads/windows/).
-- The Python launcher available as `py` in PowerShell.
+- Windows 11 or a supported macOS version.
+- Python 3.10 or newer.
+- The `py` launcher on Windows or `python3` on macOS.
 - Read and write access to the selected browser profiles and backup directory.
 
 Confirm Python is available:
@@ -133,6 +135,16 @@ Confirm Python is available:
 ```powershell
 py --version
 ```
+
+On macOS:
+
+```bash
+python3 --version
+python3 -m pip install -e '.[dev]'
+./run-browser-bookmark-tool.sh --help
+```
+
+The shell launcher runs the checked-out source with `python3`. macOS may request access to browser profile or backup folders. Grant only the filesystem access needed for the selected profiles and destination.
 
 ## Downloads
 
@@ -254,15 +266,34 @@ HTML backups are portable imports but cannot directly restore full Chromium meta
 The tool searches these standard locations:
 
 ```text
-Chrome: %LOCALAPPDATA%\Google\Chrome\User Data\Default
-Edge:   %LOCALAPPDATA%\Microsoft\Edge\User Data\Default
-Firefox profile list: %APPDATA%\Mozilla\Firefox\profiles.ini
-Firefox data:         <selected profile>\places.sqlite
+Windows Chrome:  %LOCALAPPDATA%\Google\Chrome\User Data\Default
+Windows Edge:    %LOCALAPPDATA%\Microsoft\Edge\User Data\Default
+Windows Firefox: %APPDATA%\Mozilla\Firefox\profiles.ini
+macOS Chrome:    ~/Library/Application Support/Google/Chrome/Default
+macOS Edge:      ~/Library/Application Support/Microsoft Edge/Default
+macOS Firefox:   ~/Library/Application Support/Firefox/profiles.ini
+Firefox data:    <selected profile>/places.sqlite
 ```
 
 It also detects directories named `Profile *` under each Chromium browser's `User Data` directory when they contain a `Bookmarks` file. Firefox discovery parses `profiles.ini`, honors `IsRelative`, prefers sections marked `Default=1`, and includes only profiles containing `places.sqlite`.
 
 ## Command-line use
+
+Windows examples below use PowerShell and `py`. On macOS, invoke the same options with `./run-browser-bookmark-tool.sh` or `python3 -m browser_bookmark_sync` and use the profile paths listed above.
+
+Generate a backup-only `launchd` property list without registering it automatically:
+
+```bash
+./run-browser-bookmark-tool.sh \
+  --chrome-profile "$HOME/Library/Application Support/Google/Chrome/Default" \
+  --edge-profile "$HOME/Library/Application Support/Microsoft Edge/Default" \
+  --backup-dir "$HOME/Documents/Browser Bookmark Backups" \
+  --write-launchd-plist "$HOME/Library/LaunchAgents/com.browser-bookmark-tool.backup.plist" \
+  --task-name "Bookmark Backup" \
+  --task-time 02:00
+```
+
+Review the generated file before loading it with `launchctl bootstrap gui/$(id -u)`. Add `--task-sync` only after a successful dry run; Firefox writes additionally require an enabled Firefox profile and `--firefox-export`.
 
 ### Back up and export without synchronization
 
@@ -648,9 +679,9 @@ Do not restore a Chrome backup into Edge or an Edge backup into Chrome unless yo
 - Duplicate removal and alphabetization are disabled by default.
 - Direct restore requires JSON recovery snapshots. HTML restore uses the browser's import function.
 - Preview reports are CLI-only. Detailed reports are private data and must not be committed or attached to public issues.
-- Task Scheduler support generates a reviewed PowerShell registration script. It does not silently register tasks.
-- Cloud-hosted AI agents cannot access browser profiles on the local Windows computer. Scheduled browser operations require a local scheduler or a tightly controlled self-hosted Windows runner using the same Windows account.
-- The standalone executable is Windows-only and is built as a console-capable application so CLI output remains available.
+- Task Scheduler and `launchd` support generate reviewed configuration files. They do not silently register or load tasks.
+- Cloud-hosted AI agents cannot access browser profiles on the local computer. Scheduled browser operations require a local scheduler or a tightly controlled self-hosted runner using the same account.
+- Native Windows and macOS executables are built as console-capable applications so CLI output remains available. macOS artifacts are not signed or notarized.
 - No public executable release exists until a trusted Authenticode certificate is configured. Build from source until the signed release workflow succeeds.
 
 Track fixes and release-readiness changes in the [assessment](assessment.md) and [changelog](changelog.md).
@@ -679,7 +710,7 @@ Build the standalone executable:
 .\build.ps1
 ```
 
-The executable is written to `dist\BrowserBookmarkTool.exe`. The SHA-pinned Windows workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) tests Python 3.10 through 3.13, runs lint, compilation, CLI, and dependency checks, builds the executable after the test matrix passes, and retains the workflow artifact for 14 days. Current live workflow status and any release blockers are recorded in [assessment.md](assessment.md).
+On Windows the executable is written to `dist\BrowserBookmarkTool.exe`. On macOS, build with `python3 -m PyInstaller --noconfirm --clean --onefile --name BrowserBookmarkTool browser_bookmark_sync.py`; the executable is written to `dist/BrowserBookmarkTool`. The SHA-pinned cross-platform workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) retains the Windows artifact for 14 days and performs a native macOS build and smoke test without publishing the unsigned binary. Current live workflow status and release blockers are recorded in [assessment.md](assessment.md).
 
 Validate the release packaging locally without creating a distributable signed package:
 

@@ -1,17 +1,23 @@
 # Scheduled AI Execution
 
-Browser Bookmark Tool can be invoked by Codex, Claude, Copilot, Windows Task Scheduler, or another local scheduler through one deterministic PowerShell entrypoint. The AI model is the scheduler and monitor. The bookmark tool performs the actual backup or synchronization.
+Browser Bookmark Tool can be invoked by Codex, Claude, Copilot, Windows Task Scheduler, macOS `launchd`, or another local scheduler through deterministic PowerShell and shell entrypoints. The AI model is the scheduler and monitor. The bookmark tool performs the actual backup or synchronization.
 
 ## Required execution boundary
 
-Chrome, Edge, and optional Firefox bookmark files exist on the Windows computer that owns the browser profiles. A cloud-hosted coding agent or GitHub-hosted runner cannot access those files.
+Chrome, Edge, and optional Firefox bookmark files exist on the Windows or macOS computer that owns the browser profiles. A cloud-hosted coding agent or GitHub-hosted runner cannot access those files.
 
 Use one of these execution environments:
 
 - A local Codex automation running on the browser computer.
 - A local GitHub Copilot CLI session or externally scheduled Copilot CLI process running on the browser computer.
 - A local Claude Desktop scheduled task or Claude Code session running on the browser computer.
-- A dedicated self-hosted Windows runner operating under the same Windows account as the browser profiles.
+- A dedicated self-hosted Windows or macOS runner operating under the same local account as the browser profiles.
+
+## macOS entrypoint and launchd
+
+Use `./run-browser-bookmark-tool.sh --check-automation PRIVATE_CONFIG.json` and `--run-automation` with the same private configuration contract documented below. The shell launcher requires Python 3.10 or newer and keeps browser data local.
+
+For a direct named-profile schedule, generate a backup-only property list with `--write-launchd-plist`. Review it, then load it with `launchctl bootstrap gui/$(id -u) PATH.plist`. Unload it with `launchctl bootout gui/$(id -u) PATH.plist`. The generator never loads or replaces a running job automatically. Codex, Claude, and Copilot schedules must run locally on the Mac that owns the profiles and use the same narrow filesystem permissions.
 
 Do not copy real bookmark files, profile mappings, automation configuration, logs, or result files into Git, an AI prompt, an issue, a pull request, or a cloud artifact.
 
