@@ -73,17 +73,6 @@ Acceptance criteria:
 
 These upgrades improve reporting, multi-profile administration, and browser coverage.
 
-### FUT-004: Machine-readable preview reports
-
-Allow dry-run results to be saved as privacy-safe JSON or CSV reports for review and automation.
-
-Acceptance criteria:
-
-- Reports contain counts and change categories without bookmark URLs by default.
-- An explicit option controls whether bookmark details are included.
-- Report generation performs no browser writes or backup pruning.
-- JSON and CSV output are covered by tests.
-
 ### FUT-005: Multi-profile batch dashboard
 
 Add a GUI view for selecting, previewing, and running multiple named profile mappings with independent results.
@@ -145,6 +134,18 @@ Acceptance criteria:
 - Delivery timeouts, missing executables, and nonzero notifier exits produce a privacy-safe diagnostic without exposing command contents or credentials.
 - Testing notification delivery does not access browser profiles, create backups, change bookmarks, or alter failure suppression history.
 - Tests cover successful delivery, timeout, missing command, nonzero exit, and payload redaction.
+
+### FUT-020: Preview report comparison and policy gates
+
+Compare versioned preview reports without reopening browser profiles and optionally enforce count-only automation thresholds.
+
+Acceptance criteria:
+
+- Comparison matches mapping names and reports settings, count, duplicate, and folder-change differences between two supported report schemas.
+- Optional thresholds can fail with a documented nonzero exit code when planned additions, duplicate removals, or folder changes exceed configured limits.
+- Detailed reports are rejected by default unless an explicit private-data acknowledgment is supplied.
+- Comparison never opens browser profiles, creates backups, changes either input report, or exposes bookmark details in default output.
+- Tests cover schema validation, missing mappings, count changes, thresholds, detailed-report rejection, and no-write behavior.
 
 ## Priority 3: Later
 

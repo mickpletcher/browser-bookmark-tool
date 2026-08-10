@@ -37,6 +37,7 @@ DUPLICATE_MODES = ("conservative", "aggressive")
 MERGE_STRATEGIES = ("chrome-wins", "edge-wins", "preserve-both", "merge-folders", "dated-folder")
 BACKUP_CATALOG_FILTERS = ("all", "complete", "incomplete", "valid", "invalid")
 AUTOMATION_SCHEMA_VERSION = 1
+PREVIEW_REPORT_SCHEMA_VERSION = 1
 AUTOMATION_OPERATIONS = ("backup", "sync", "dry-run")
 AUTOMATION_BROWSER_BEHAVIORS = ("block", "close")
 AUTOMATION_HEALTH_LIMIT = 100
@@ -1505,6 +1506,153 @@ class SyncPreview:
         )
 
 
+def preview_report_entry(
+    mapping_name: str,
+    preview: SyncPreview,
+    merged: dict[str, Any],
+    include_bookmark_details: bool = False,
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "mapping": mapping_name,
+        "settings": {
+            "merge_strategy": preview.merge_strategy,
+            "duplicate_mode": preview.duplicate_mode,
+            "firefox_enabled": preview.firefox_enabled,
+        },
+        "counts": {
+            "chrome_bookmarks": preview.chrome_count,
+            "edge_favorites": preview.edge_count,
+            "firefox_bookmarks": preview.firefox_count,
+            "final_bookmarks": preview.merged_count,
+        },
+        "changes": {
+            "chrome_only_urls": preview.chrome_only,
+            "edge_only_urls": preview.edge_only,
+            "firefox_only_urls": preview.firefox_only,
+            "input_duplicates": preview.input_duplicates,
+            "duplicates_removed": preview.duplicates_removed,
+            "folders_added": preview.folders_added,
+            "folders_reordered": preview.folders_reordered,
+        },
+    }
+    if include_bookmark_details:
+        bookmarks: list[dict[str, str]] = []
+
+        def collect(node: dict[str, Any], folders: tuple[str, ...]) -> None:
+            if node.get("type") == "url":
+                bookmarks.append(
+                    {
+                        "name": str(node.get("name") or ""),
+                        "url": str(node.get("url") or ""),
+                        "folder_path": "/".join(folders),
+                    }
+                )
+                return
+            if node.get("type") != "folder":
+                return
+            folder_name = str(node.get("name") or "Folder")
+            child_folders = (*folders, folder_name)
+            for child in node.get("children", []):
+                collect(child, child_folders)
+
+        for root_name in ROOT_NAMES:
+            root = merged.get("roots", {}).get(root_name)
+            if root:
+                collect(root, ())
+        entry["bookmarks"] = bookmarks
+    return entry
+
+
+def validate_preview_report_destination(
+    destination: Path,
+    mappings: Iterable[ProfileMapping],
+    firefox_enabled: bool,
+) -> None:
+    if destination.suffix.casefold() not in (".json", ".csv"):
+        raise RuntimeError("Preview report path must end in .json or .csv.")
+    resolved_destination = destination.resolve()
+    for mapping in mappings:
+        profiles = [mapping.chrome_profile, mapping.edge_profile]
+        if firefox_enabled and mapping.firefox_profile:
+            profiles.append(mapping.firefox_profile)
+        for profile in profiles:
+            try:
+                resolved_destination.relative_to(profile.resolve())
+            except ValueError:
+                continue
+            raise RuntimeError("Preview reports cannot be written inside a selected browser profile.")
+
+
+def write_preview_report(
+    destination: Path,
+    entries: list[dict[str, Any]],
+    include_bookmark_details: bool = False,
+) -> Path:
+    generated_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    if destination.suffix.casefold() == ".json":
+        return write_json_atomic(
+            destination,
+            {
+                "schema_version": PREVIEW_REPORT_SCHEMA_VERSION,
+                "kind": "preview-report",
+                "generated_at": generated_at,
+                "bookmark_details_included": include_bookmark_details,
+                "mappings": entries,
+            },
+        )
+    if destination.suffix.casefold() != ".csv":
+        raise RuntimeError("Preview report path must end in .json or .csv.")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f"{destination.name}.", suffix=".pending", dir=destination.parent)
+    temporary_path = Path(temporary)
+    fields = ["mapping", "category", "metric", "value"]
+    if include_bookmark_details:
+        fields.extend(("name", "url", "folder_path"))
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=fields, lineterminator="\n")
+            writer.writeheader()
+            metadata = {
+                "schema_version": PREVIEW_REPORT_SCHEMA_VERSION,
+                "kind": "preview-report",
+                "generated_at": generated_at,
+                "bookmark_details_included": include_bookmark_details,
+            }
+            for metric, value in metadata.items():
+                writer.writerow({"category": "report", "metric": metric, "value": value})
+            for entry in entries:
+                mapping = entry["mapping"]
+                for category in ("settings", "counts", "changes"):
+                    for metric, value in entry[category].items():
+                        writer.writerow(
+                            {
+                                "mapping": mapping,
+                                "category": category,
+                                "metric": metric,
+                                "value": value,
+                            }
+                        )
+                if include_bookmark_details:
+                    for index, bookmark in enumerate(entry.get("bookmarks", []), start=1):
+                        writer.writerow(
+                            {
+                                "mapping": mapping,
+                                "category": "bookmark",
+                                "metric": index,
+                                "name": bookmark["name"],
+                                "url": bookmark["url"],
+                                "folder_path": bookmark["folder_path"],
+                            }
+                        )
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, destination)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return destination
+
+
 def count_bookmarks(data: dict[str, Any]) -> int:
     return sum(1 for root in data.get("roots", {}).values() for _ in iter_urls(root))
 
@@ -1828,7 +1976,28 @@ def preview_synchronization(
     merge_strategy: str = "chrome-wins",
     firefox_profile: Path | None = None,
 ) -> SyncPreview:
-    _, preview = prepare_merged_data(
+    _, preview = preview_synchronization_data(
+        chrome_profile,
+        edge_profile,
+        deduplicate=deduplicate,
+        alphabetize=alphabetize,
+        duplicate_mode=duplicate_mode,
+        merge_strategy=merge_strategy,
+        firefox_profile=firefox_profile,
+    )
+    return preview
+
+
+def preview_synchronization_data(
+    chrome_profile: Path,
+    edge_profile: Path,
+    deduplicate: bool = False,
+    alphabetize: bool = False,
+    duplicate_mode: str = "conservative",
+    merge_strategy: str = "chrome-wins",
+    firefox_profile: Path | None = None,
+) -> tuple[dict[str, Any], SyncPreview]:
+    return prepare_merged_data(
         read_bookmarks(chrome_profile),
         read_bookmarks(edge_profile),
         deduplicate=deduplicate,
@@ -1837,7 +2006,6 @@ def preview_synchronization(
         merge_strategy=merge_strategy,
         firefox=read_firefox_bookmarks(firefox_profile) if firefox_profile else None,
     )
-    return preview
 
 
 @dataclass
@@ -2825,7 +2993,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=APP_NAME)
     operation_options = parser.add_mutually_exclusive_group()
     operation_options.add_argument("--sync", action="store_true", help="Synchronize instead of backup/export only")
-    operation_options.add_argument("--dry-run", action="store_true", help="Preview changes without backups, exports, or writes")
+    operation_options.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview changes without browser or backup writes",
+    )
     operation_options.add_argument(
         "--check-automation",
         type=Path,
@@ -2882,6 +3054,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--restore-browser", choices=("Chrome", "Edge"))
     parser.add_argument("--verify-manifest", type=Path, help="Manifest to use with --verify-backup")
     parser.add_argument("--catalog-filter", choices=BACKUP_CATALOG_FILTERS, default="all")
+    parser.add_argument(
+        "--preview-report",
+        type=Path,
+        help="Write --dry-run results to a privacy-safe .json or .csv report",
+    )
+    parser.add_argument(
+        "--include-bookmark-details",
+        action="store_true",
+        help="Include private bookmark names, URLs, and folder paths in --preview-report",
+    )
     parser.add_argument("--log-file", type=Path, help="Privacy-safe operation log path")
     parser.add_argument("--verbose", action="store_true", help="Print and log additional count-only details")
     parser.add_argument("--write-task-script", type=Path, help="Write a PowerShell scheduled-task registration script")
@@ -2920,6 +3102,8 @@ def main(argv: list[str] | None = None) -> int:
             args.catalog_backups,
             args.compare_backups,
             args.catalog_filter != "all",
+            args.preview_report,
+            args.include_bookmark_details,
         )
     )
     if args.gui or not has_cli_operation:
@@ -2927,6 +3111,13 @@ def main(argv: list[str] | None = None) -> int:
         App(root)
         root.mainloop()
         return 0
+
+    if args.preview_report and not args.dry_run:
+        print("Error: --preview-report requires --dry-run.", file=sys.stderr)
+        return 1
+    if args.include_bookmark_details and not args.preview_report:
+        print("Error: --include-bookmark-details requires --preview-report.", file=sys.stderr)
+        return 1
 
     automation_path = args.check_automation or args.run_automation
     if automation_path:
@@ -3022,6 +3213,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+    if args.preview_report:
+        try:
+            validate_preview_report_destination(args.preview_report, mappings, firefox_enabled)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+
     if (args.restore_backup or args.write_task_script) and len(mappings) != 1:
         print("Error: restore and task-script operations require exactly one profile mapping.", file=sys.stderr)
         return 1
@@ -3062,12 +3260,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Task Scheduler script: {path}")
         return 0
 
+    preview_entries: list[dict[str, Any]] = []
     for index, mapping in enumerate(mappings):
         if len(mappings) > 1:
             print(f"[{mapping.name}]")
         if args.dry_run:
             try:
-                preview = preview_synchronization(
+                merged, preview = preview_synchronization_data(
                     mapping.chrome_profile,
                     mapping.edge_profile,
                     deduplicate=args.deduplicate,
@@ -3079,6 +3278,15 @@ def main(argv: list[str] | None = None) -> int:
             except RuntimeError as exc:
                 print(f"Error: {exc}", file=sys.stderr)
                 return 1
+            if args.preview_report:
+                preview_entries.append(
+                    preview_report_entry(
+                        mapping.name,
+                        preview,
+                        merged,
+                        include_bookmark_details=args.include_bookmark_details,
+                    )
+                )
             print(preview.render())
         else:
             try:
@@ -3124,6 +3332,17 @@ def main(argv: list[str] | None = None) -> int:
                 print(result.preview.render())
         if index < len(mappings) - 1:
             print()
+    if args.preview_report:
+        try:
+            report_path = write_preview_report(
+                args.preview_report,
+                preview_entries,
+                include_bookmark_details=args.include_bookmark_details,
+            )
+        except OSError as exc:
+            print(f"Error: Could not write preview report {args.preview_report}: {exc}", file=sys.stderr)
+            return 1
+        print(f"Preview report: {report_path}")
     return 0
 
 

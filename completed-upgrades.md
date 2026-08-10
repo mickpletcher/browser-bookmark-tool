@@ -94,3 +94,10 @@ The following capabilities were already complete when the upgrade tracking files
 - Release: Unreleased
 - Summary: Adds read-only GUI and CLI inventory that groups generated backups by timestamp, separates completeness from validity, filters complete, incomplete, valid, and invalid sets, reports count-only Chrome, Edge, and Firefox content, calculates changes from the previous complete and valid set, and directly compares two verified sets.
 - Verification: The 100-case suite covers complete sets, missing and extra members, manifest mismatches, unrelated files and directories, CLI filters and comparison, GUI output, count privacy, and exact before-and-after backup-directory equality. Firefox catalog reads use SQLite immutable mode and create no WAL or shared-memory sidecars. Ruff and Python compilation pass.
+
+### FUT-004: Machine-readable preview reports
+
+- Completed: 2026-08-09
+- Release: Unreleased
+- Summary: Adds optional atomic JSON and CSV output for direct and multi-mapping dry runs. Versioned default reports contain only settings, counts, and change categories. The explicit `--include-bookmark-details` option adds merged bookmark names, URLs, and folder paths, while report destinations inside selected browser profiles are rejected.
+- Verification: The 104-case suite covers default JSON privacy, explicit JSON details, default and detailed CSV schemas, multi-mapping aggregation, unsupported extensions, unsafe browser-profile destinations, option dependencies, exact browser-file preservation, absent backup directories, and a fail-on-call backup-pruning guard. Ruff and Python compilation pass.
