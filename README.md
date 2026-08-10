@@ -1,6 +1,6 @@
 # Browser Bookmark Tool
 
-![Browser Bookmark Tool social preview](.github/social-preview.jpg)
+![Browser Bookmark Tool — Windows and macOS with read-only Safari support](.github/social-preview.jpg?v=20260810)
 
 [![Cross-platform CI](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -16,6 +16,13 @@ Version: 0.3.0
 Release readiness: Source ready; trusted signing credential required for binary release
 
 The GUI, CLI, transactional workflow, browser safeguards, shell and PowerShell entrypoints, schedulers, and native smoke builds remain implemented across the supported platforms. They can also discover, preview, back up, organize, merge, and export Safari bookmarks on macOS without writing to Safari. Direct Safari writes remain open under `FUT-011`. Safari may synchronize bookmark changes through iCloud; this delivery does not attempt any Safari or iCloud modification. Windows signing and macOS signing/notarization remain distribution requirements.
+
+| Platform | Chrome and Edge | Firefox | Safari | Distribution |
+| --- | --- | --- | --- | --- |
+| Windows 11 | Backup, export, and synchronization | Optional import/export, verification, and restore | Not applicable | Source ready; signed binary pending |
+| macOS | Backup, export, and synchronization | Optional import/export, verification, and restore | Read-only discovery, backup, preview, merge/export, and guided manual HTML import | Source ready; signed/notarized binary pending |
+
+Safari is not a synchronization write target. The tool does not modify `Bookmarks.plist`, control Safari, or write through an undocumented Apple interface.
 
 - [Current assessment](assessment.md)
 - [Changelog](changelog.md)
