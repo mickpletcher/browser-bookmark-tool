@@ -10,6 +10,7 @@ import hashlib
 import html
 import json
 import os
+import plistlib
 import re
 import shutil
 import sqlite3
@@ -29,9 +30,10 @@ from urllib.parse import urlsplit, urlunsplit
 
 APP_NAME = "Browser Bookmark Tool"
 ROOT_NAMES = ("bookmark_bar", "other", "synced")
-BROWSER_PROCESS_NAMES = ("chrome.exe", "msedge.exe")
-FIREFOX_PROCESS_NAME = "firefox.exe"
-SUPPORTED_BROWSER_PROCESS_NAMES = (*BROWSER_PROCESS_NAMES, FIREFOX_PROCESS_NAME)
+WINDOWS_BROWSER_PROCESS_NAMES = ("chrome.exe", "msedge.exe")
+MACOS_BROWSER_PROCESS_NAMES = ("Google Chrome", "Microsoft Edge")
+WINDOWS_FIREFOX_PROCESS_NAME = "firefox.exe"
+MACOS_FIREFOX_PROCESS_NAME = "firefox"
 MAX_BACKUPS = 50
 DUPLICATE_MODES = ("conservative", "aggressive")
 MERGE_STRATEGIES = ("chrome-wins", "edge-wins", "preserve-both", "merge-folders", "dated-folder")
@@ -101,11 +103,33 @@ def roaming_app_data() -> Path:
     return Path(value)
 
 
+def is_macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def browser_process_names() -> tuple[str, str]:
+    return MACOS_BROWSER_PROCESS_NAMES if is_macos() else WINDOWS_BROWSER_PROCESS_NAMES
+
+
+def firefox_process_name() -> str:
+    return MACOS_FIREFOX_PROCESS_NAME if is_macos() else WINDOWS_FIREFOX_PROCESS_NAME
+
+
+def supported_browser_process_names() -> tuple[str, str, str]:
+    return (*browser_process_names(), firefox_process_name())
+
+
 def default_backup_dir() -> Path:
     return Path.home() / "Documents" / "Browser Bookmark Backups"
 
 
 def browser_user_data(browser: str) -> Path:
+    if is_macos():
+        relative = {
+            "Chrome": Path("Google/Chrome"),
+            "Edge": Path("Microsoft Edge"),
+        }[browser]
+        return Path.home() / "Library" / "Application Support" / relative
     relative = {
         "Chrome": Path("Google/Chrome/User Data"),
         "Edge": Path("Microsoft/Edge/User Data"),
@@ -122,7 +146,11 @@ def discover_profiles(browser: str) -> list[Path]:
 
 
 def discover_firefox_profiles(profiles_ini: Path | None = None) -> list[Path]:
-    source = profiles_ini or roaming_app_data() / "Mozilla" / "Firefox" / "profiles.ini"
+    source = profiles_ini or (
+        Path.home() / "Library" / "Application Support" / "Firefox" / "profiles.ini"
+        if is_macos()
+        else roaming_app_data() / "Mozilla" / "Firefox" / "profiles.ini"
+    )
     if not source.is_file():
         return []
     parser = configparser.ConfigParser(interpolation=None)
@@ -149,6 +177,8 @@ def discover_firefox_profiles(profiles_ini: Path | None = None) -> list[Path]:
 
 
 def running_browser_processes() -> list[str]:
+    if is_macos():
+        return running_macos_processes(browser_process_names(), "Browser")
     try:
         result = subprocess.run(
             ["tasklist", "/FO", "CSV", "/NH"],
@@ -167,10 +197,12 @@ def running_browser_processes() -> list[str]:
         for row in csv.reader(result.stdout.splitlines())
         if row
     }
-    return [name for name in BROWSER_PROCESS_NAMES if name in running]
+    return [name for name in browser_process_names() if name in running]
 
 
 def running_firefox_processes() -> list[str]:
+    if is_macos():
+        return running_macos_processes((firefox_process_name(),), "Firefox")
     try:
         result = subprocess.run(
             ["tasklist", "/FO", "CSV", "/NH"],
@@ -185,24 +217,48 @@ def running_firefox_processes() -> list[str]:
         detail = result.stderr.strip() or "tasklist returned an error"
         raise RuntimeError(f"Firefox process detection failed: {detail}. Use --force only if Firefox is closed.")
     running = {row[0].lstrip("\ufeff").casefold() for row in csv.reader(result.stdout.splitlines()) if row}
-    return [FIREFOX_PROCESS_NAME] if FIREFOX_PROCESS_NAME in running else []
+    process = firefox_process_name()
+    return [process] if process in running else []
+
+
+def running_macos_processes(processes: Iterable[str], label: str) -> list[str]:
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "comm="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"{label} process detection failed. Use --force only if selected browsers are closed.") from exc
+    if result.returncode != 0:
+        detail = result.stderr.strip() or "ps returned an error"
+        raise RuntimeError(f"{label} process detection failed: {detail}. Use --force only if selected browsers are closed.")
+    running = {Path(line.strip()).name.casefold() for line in result.stdout.splitlines() if line.strip()}
+    return [process for process in processes if process.casefold() in running]
 
 
 def close_browser_processes(processes: Iterable[str]) -> None:
     requested = {process.casefold() for process in processes}
-    for process in SUPPORTED_BROWSER_PROCESS_NAMES:
-        if process not in requested:
+    for process in supported_browser_process_names():
+        if process.casefold() not in requested:
             continue
         try:
+            command = (
+                ["pkill", "-x", process]
+                if is_macos()
+                else ["taskkill", "/IM", process, "/T", "/F"]
+            )
             subprocess.run(
-                ["taskkill", "/IM", process, "/T", "/F"],
+                command,
                 capture_output=True,
                 text=True,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 check=False,
             )
         except OSError as exc:
-            raise RuntimeError(f"Could not run taskkill for {process}.") from exc
+            tool = "pkill" if is_macos() else "taskkill"
+            raise RuntimeError(f"Could not run {tool} for {process}.") from exc
 
 
 def wait_for_browsers_to_close(timeout: float = 10.0) -> list[str]:
@@ -700,7 +756,7 @@ def restore_json_backup(
         raise RuntimeError(f"The recovery snapshot {backup_path} is not a Chromium bookmark file.")
     validate_chromium_bookmark_schema(data)
     validate_unique_guids(data)
-    process = {"Chrome": "chrome.exe", "Edge": "msedge.exe"}[browser]
+    process = dict(zip(("Chrome", "Edge"), browser_process_names(), strict=True))[browser]
     if not force and process in running_browser_processes():
         raise RuntimeError(f"Restore blocked because {process} is running.")
     current = profile / "Bookmarks"
@@ -762,6 +818,56 @@ def write_task_scheduler_script(
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(script, encoding="utf-8")
+    return destination
+
+
+def write_launchd_plist(
+    destination: Path,
+    chrome_profile: Path,
+    edge_profile: Path,
+    backup_dir: Path,
+    task_name: str,
+    task_time: str,
+    synchronize_task: bool = False,
+    firefox_profile: Path | None = None,
+    firefox_export: bool = False,
+) -> Path:
+    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", task_time):
+        raise RuntimeError("Task time must use 24-hour HH:MM format.")
+    if firefox_export and (not firefox_profile or not synchronize_task):
+        raise RuntimeError("Firefox launchd export requires a Firefox profile and synchronization opt in.")
+    executable = Path(sys.executable).resolve()
+    frozen = bool(getattr(sys, "frozen", False))
+    arguments = [str(executable)] + ([] if frozen else ["-m", "browser_bookmark_sync"]) + [
+        "--chrome-profile",
+        str(chrome_profile),
+        "--edge-profile",
+        str(edge_profile),
+        "--backup-dir",
+        str(backup_dir),
+        "--keep",
+        str(MAX_BACKUPS),
+    ]
+    if firefox_profile:
+        arguments.extend(["--firefox-profile", str(firefox_profile)])
+    if synchronize_task:
+        arguments.append("--sync")
+        if firefox_export:
+            arguments.append("--firefox-export")
+    hour, minute = (int(value) for value in task_time.split(":"))
+    label = re.sub(r"[^A-Za-z0-9.-]+", "-", task_name).strip("-.").lower()
+    if not label:
+        raise RuntimeError("Task name must contain at least one letter or number.")
+    document = {
+        "Label": f"com.browser-bookmark-tool.{label}",
+        "ProgramArguments": arguments,
+        "StartCalendarInterval": {"Hour": hour, "Minute": minute},
+        "RunAtLoad": False,
+        "ProcessType": "Background",
+    }
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("wb") as stream:
+        plistlib.dump(document, stream, sort_keys=True)
     return destination
 
 
@@ -2774,7 +2880,7 @@ def safe_automation_error(exc: Exception) -> str:
     if "process detection" in folded:
         return "Browser process detection is unavailable."
     if "browser process" in folded or "synchronization blocked" in folded:
-        detected = [process for process in SUPPORTED_BROWSER_PROCESS_NAMES if process in folded]
+        detected = [process for process in supported_browser_process_names() if process.casefold() in folded]
         suffix = f": {', '.join(detected)}" if detected else ""
         return f"Synchronization was blocked by running browser processes{suffix}."
     if "no bookmarks file" in folded:
@@ -2853,7 +2959,7 @@ def sanitize_health_record(record: dict[str, Any]) -> dict[str, Any]:
             if isinstance((value := counts.get(name)), int) and not isinstance(value, bool) and value >= 0
         },
         "duration_seconds": duration_seconds,
-        "processes": [name for name in SUPPORTED_BROWSER_PROCESS_NAMES if name in processes],
+        "processes": [name for name in supported_browser_process_names() if name in processes],
         "error_category": (
             record.get("error_category")
             if record.get("error_category") in AUTOMATION_ERROR_CATEGORIES
@@ -2933,7 +3039,8 @@ def automation_health_record(
             counts[destination] += int(result.get(source) is True)
         closed = result.get("browsers_closed", [])
         if isinstance(closed, list):
-            processes.update(name for name in closed if name in SUPPORTED_BROWSER_PROCESS_NAMES)
+            allowed = supported_browser_process_names()
+            processes.update(name for name in closed if name in allowed)
     counts["stale_locks_replaced"] = int(stale_lock_replaced)
 
     error = document.get("error", "")
@@ -2943,7 +3050,7 @@ def automation_health_record(
     else:
         status = "success" if document.get("status") == "success" else "failed"
     folded_error = str(error).casefold()
-    processes.update(name for name in SUPPORTED_BROWSER_PROCESS_NAMES if name in folded_error)
+    processes.update(name for name in supported_browser_process_names() if name.casefold() in folded_error)
     return sanitize_health_record(
         {
             "operation": config.operation,
@@ -3659,6 +3766,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--log-file", type=Path, help="Privacy-safe operation log path")
     parser.add_argument("--verbose", action="store_true", help="Print and log additional count-only details")
     parser.add_argument("--write-task-script", type=Path, help="Write a PowerShell scheduled-task registration script")
+    parser.add_argument("--write-launchd-plist", type=Path, help="Write a macOS launchd property list")
     parser.add_argument("--task-name", default=APP_NAME)
     parser.add_argument("--task-time", default="02:00")
     parser.add_argument("--task-sync", action="store_true", help="Opt in to synchronization in the generated task")
@@ -3685,6 +3793,7 @@ def main(argv: list[str] | None = None) -> int:
             args.profile_map,
             args.restore_backup,
             args.write_task_script,
+            args.write_launchd_plist,
             args.dry_run,
             args.sync,
             args.check_automation,
@@ -3808,7 +3917,13 @@ def main(argv: list[str] | None = None) -> int:
         print("Error: --catalog-filter requires --catalog-backups.", file=sys.stderr)
         return 1
     if catalog_operation:
-        if args.restore_backup or args.restore_browser or args.write_task_script or args.verify_manifest:
+        if (
+            args.restore_backup
+            or args.restore_browser
+            or args.write_task_script
+            or args.write_launchd_plist
+            or args.verify_manifest
+        ):
             print("Error: backup catalog operations cannot be combined with restore, verification, or task generation.", file=sys.stderr)
             return 1
         try:
@@ -3827,7 +3942,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Error: --verify-manifest requires --verify-backup.", file=sys.stderr)
         return 1
     if args.verify_backup:
-        if args.restore_backup or args.restore_browser or args.write_task_script:
+        if args.restore_backup or args.restore_browser or args.write_task_script or args.write_launchd_plist:
             print("Error: backup verification cannot be combined with restore or task-script operations.", file=sys.stderr)
             return 1
         try:
@@ -3841,7 +3956,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         firefox_enabled = args.enable_firefox or args.firefox_profile is not None
         if args.firefox_export and (
-            not firefox_enabled or (not args.sync and not (args.write_task_script and args.task_sync))
+            not firefox_enabled
+            or (
+                not args.sync
+                and not ((args.write_task_script or args.write_launchd_plist) and args.task_sync)
+            )
         ):
             raise RuntimeError("--firefox-export requires Firefox to be enabled with --sync.")
         if args.profile_map and args.firefox_profile:
@@ -3872,7 +3991,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
 
-    if (args.restore_backup or args.write_task_script) and len(mappings) != 1:
+    if (args.restore_backup or args.write_task_script or args.write_launchd_plist) and len(mappings) != 1:
         print("Error: restore and task-script operations require exactly one profile mapping.", file=sys.stderr)
         return 1
 
@@ -3910,6 +4029,22 @@ def main(argv: list[str] | None = None) -> int:
             firefox_export=args.firefox_export,
         )
         print(f"Task Scheduler script: {path}")
+        return 0
+
+    if args.write_launchd_plist:
+        mapping = mappings[0]
+        path = write_launchd_plist(
+            args.write_launchd_plist,
+            mapping.chrome_profile,
+            mapping.edge_profile,
+            mapping.backup_dir,
+            args.task_name,
+            args.task_time,
+            synchronize_task=args.task_sync,
+            firefox_profile=mapping.firefox_profile if firefox_enabled else None,
+            firefox_export=args.firefox_export,
+        )
+        print(f"launchd property list: {path}")
         return 0
 
     preview_entries: list[dict[str, Any]] = []

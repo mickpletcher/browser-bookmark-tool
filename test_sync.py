@@ -2,6 +2,7 @@ import csv
 import hashlib
 import json
 import os
+import plistlib
 import shutil
 import sqlite3
 import subprocess
@@ -22,6 +23,7 @@ from browser_bookmark_sync import (
     compare_backup_sets,
     deduplicate_bookmarks,
     discover_firefox_profiles,
+    discover_profiles,
     export_html,
     iter_urls,
     load_automation_config,
@@ -42,8 +44,14 @@ from browser_bookmark_sync import (
     validate_backup_manifest,
     validate_unique_guids,
     verify_json_backup,
+    write_launchd_plist,
     write_task_scheduler_script,
 )
+
+
+@pytest.fixture(autouse=True)
+def windows_platform(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(sync_module, "is_macos", lambda: False)
 
 
 def data(*urls: str) -> dict:
@@ -198,6 +206,32 @@ def test_firefox_profile_discovery_uses_explicit_profiles_ini(tmp_path: Path):
     )
 
     assert discover_firefox_profiles(profiles_ini) == [relative_profile.resolve(), absolute_profile.resolve()]
+
+
+def test_macos_discovers_standard_chromium_and_firefox_profiles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(sync_module, "is_macos", lambda: True)
+    monkeypatch.setattr(sync_module.Path, "home", lambda: tmp_path)
+    application_support = tmp_path / "Library" / "Application Support"
+    chrome = application_support / "Google" / "Chrome" / "Default"
+    edge = application_support / "Microsoft Edge" / "Profile 1"
+    chrome.mkdir(parents=True)
+    edge.mkdir(parents=True)
+    (chrome / "Bookmarks").write_text(json.dumps(data()))
+    (edge / "Bookmarks").write_text(json.dumps(data()))
+    firefox_root = application_support / "Firefox"
+    firefox = firefox_root / "Profiles" / "test.default-release"
+    firefox.mkdir(parents=True)
+    (firefox / "places.sqlite").touch()
+    (firefox_root / "profiles.ini").write_text(
+        "[Profile0]\nName=default-release\nIsRelative=1\nPath=Profiles/test.default-release\nDefault=1\n"
+    )
+
+    assert discover_profiles("Chrome") == [chrome]
+    assert discover_profiles("Edge") == [edge]
+    assert discover_firefox_profiles() == [firefox.resolve()]
 
 
 def test_firefox_import_uses_selected_duplicate_mode(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
@@ -659,6 +693,21 @@ def test_running_browser_processes_detects_chrome_and_edge(monkeypatch: pytest.M
     assert running_browser_processes() == ["chrome.exe", "msedge.exe"]
 
 
+def test_macos_process_detection_uses_executable_names(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(sync_module, "is_macos", lambda: True)
+    output = (
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n"
+        "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Helper\n"
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge\n"
+        "/Applications/Firefox.app/Contents/MacOS/firefox\n"
+    )
+    completed = sync_module.subprocess.CompletedProcess([], 0, stdout=output, stderr="")
+    monkeypatch.setattr(sync_module.subprocess, "run", lambda *args, **kwargs: completed)
+
+    assert running_browser_processes() == ["Google Chrome", "Microsoft Edge"]
+    assert sync_module.running_macos_processes(("firefox",), "Firefox") == ["firefox"]
+
+
 @pytest.mark.parametrize(
     "processes",
     [["chrome.exe"], ["msedge.exe"], ["chrome.exe", "msedge.exe"]],
@@ -897,6 +946,25 @@ def test_close_browser_processes_uses_forceful_taskkill(monkeypatch: pytest.Monk
     assert commands == [
         ["taskkill", "/IM", "chrome.exe", "/T", "/F"],
         ["taskkill", "/IM", "msedge.exe", "/T", "/F"],
+    ]
+
+
+def test_close_browser_processes_uses_exact_macos_names(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(sync_module, "is_macos", lambda: True)
+    commands: list[list[str]] = []
+    completed = sync_module.subprocess.CompletedProcess([], 0, stdout="", stderr="")
+    monkeypatch.setattr(
+        sync_module.subprocess,
+        "run",
+        lambda command, **kwargs: commands.append(command) or completed,
+    )
+
+    close_browser_processes(["Google Chrome", "Microsoft Edge", "firefox", "Finder"])
+
+    assert commands == [
+        ["pkill", "-x", "Google Chrome"],
+        ["pkill", "-x", "Microsoft Edge"],
+        ["pkill", "-x", "firefox"],
     ]
 
 
@@ -2174,6 +2242,23 @@ def test_restore_rejects_html_backup(tmp_path: Path):
         restore_json_backup(html_backup, tmp_path, "Chrome", tmp_path)
 
 
+def test_macos_restore_blocks_running_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(sync_module, "is_macos", lambda: True)
+    monkeypatch.setattr(sync_module, "running_browser_processes", lambda: ["Google Chrome"])
+    profile = tmp_path / "Default"
+    profile.mkdir()
+    current = data("https://current.test")
+    backup = data("https://backup.test")
+    (profile / "Bookmarks").write_text(json.dumps(current))
+    backup_path = tmp_path / "Chrome_backup.json"
+    backup_path.write_text(json.dumps(backup))
+
+    with pytest.raises(RuntimeError, match="Google Chrome is running"):
+        restore_json_backup(backup_path, profile, "Chrome", tmp_path / "Recovery")
+
+    assert json.loads((profile / "Bookmarks").read_text()) == current
+
+
 def test_task_scheduler_script_defaults_to_backup_only(tmp_path: Path):
     destination = tmp_path / "register-task.ps1"
     write_task_scheduler_script(
@@ -2235,6 +2320,52 @@ def test_task_scheduler_rejects_invalid_time(tmp_path: Path):
             "Bookmark Backup",
             "25:99",
         )
+
+
+def test_launchd_plist_defaults_to_backup_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(sync_module.sys, "executable", "/usr/local/bin/python3")
+    destination = tmp_path / "com.browser-bookmark-tool.backup.plist"
+
+    write_launchd_plist(
+        destination,
+        Path("/Users/test/Library/Application Support/Google/Chrome/Default"),
+        Path("/Users/test/Library/Application Support/Microsoft Edge/Default"),
+        Path("/Users/test/Documents/Browser Bookmark Backups"),
+        "Bookmark Backup",
+        "03:30",
+    )
+
+    with destination.open("rb") as stream:
+        document = plistlib.load(stream)
+    assert document["Label"] == "com.browser-bookmark-tool.bookmark-backup"
+    assert document["StartCalendarInterval"] == {"Hour": 3, "Minute": 30}
+    assert document["ProgramArguments"][:3] == [
+        "/usr/local/bin/python3",
+        "-m",
+        "browser_bookmark_sync",
+    ]
+    assert "--sync" not in document["ProgramArguments"]
+
+
+def test_launchd_plist_supports_opt_in_firefox_sync(tmp_path: Path):
+    destination = tmp_path / "bookmark-sync.plist"
+    write_launchd_plist(
+        destination,
+        Path("/Chrome"),
+        Path("/Edge"),
+        Path("/Backups"),
+        "Bookmark Sync",
+        "04:00",
+        synchronize_task=True,
+        firefox_profile=Path("/Firefox"),
+        firefox_export=True,
+    )
+
+    with destination.open("rb") as stream:
+        arguments = plistlib.load(stream)["ProgramArguments"]
+    assert "--sync" in arguments
+    assert "--firefox-profile" in arguments
+    assert "--firefox-export" in arguments
 
 
 def test_cli_dry_run_processes_multiple_named_mappings(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
@@ -2698,4 +2829,3 @@ def test_powershell_automation_wrapper_runs_readiness_check(tmp_path: Path):
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout)["status"] == "success"
     assert (tmp_path / "automation-result.json").exists()
-

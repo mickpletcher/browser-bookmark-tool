@@ -122,3 +122,10 @@ The following capabilities were already complete when the upgrade tracking files
 - Release: Unreleased
 - Summary: Adds optional atomic version 1 JSON results for preview comparisons and policy decisions. Results contain the input report hashes, policy hash when used, expected mapping names, aggregate and per-mapping counts, configured limits, violations, status, and exit code while excluding private bookmark fields and every local path.
 - Verification: The 129-case suite covers passing and failed gates, exact schema shape, input and policy hashes, aggregate and per-mapping values, protected report and policy destinations, detailed-report acknowledgment and redaction, atomic replacement, invalid options, and fail-on-call guards against browser or backup access. Ruff and Python compilation pass.
+
+### FUT-013: macOS Chrome, Edge, and Firefox compatibility
+
+- Completed: 2026-08-09
+- Release: Unreleased
+- Summary: Adds native macOS Chrome, Edge, and Firefox profile discovery, platform-specific process blocking and explicit closure, portable shell execution, backup-only `launchd` generation, macOS package metadata, and a SHA-pinned native CI build while preserving Windows behavior. Safari remains separate under `FUT-011`.
+- Verification: The 135-case suite covers macOS standard profile discovery, executable-name process detection, exact-name closure, platform-aware restore blocking, launchd generation, existing transactional and rollback paths, and all Windows regressions. Ruff, compilation, shell and CLI smoke tests, physical-Mac discovery and process checks, and a native PyInstaller executable smoke test pass.

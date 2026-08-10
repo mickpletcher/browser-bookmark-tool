@@ -95,20 +95,6 @@ Acceptance criteria:
 - WAL and shared-memory sidecars are handled without replaying stale data into the restored database.
 - GUI, CLI, and failure-path tests cover valid, corrupt, mismatched, and unsupported-schema snapshots.
 
-### FUT-013: macOS Chrome, Edge, and Firefox compatibility
-
-Make the existing Chrome, Edge, and optional Firefox backup, preview, organization, restore, and synchronization workflow run natively on macOS before adding Safari support.
-
-Acceptance criteria:
-
-- Platform adapters isolate browser profile discovery, process detection, browser closure, scheduling, launchers, and packaging without changing verified Windows behavior.
-- Chrome, Microsoft Edge, and Firefox profiles are discovered from supported macOS locations, with explicit paths still available for nonstandard profiles.
-- Backup, dry-run, HTML export, restore, deduplication, alphabetization, and transactional synchronization for Chrome, Edge, and enabled Firefox profiles pass on a physical Mac.
-- Browser-process safeguards detect Chrome, Edge, and enabled Firefox write targets on macOS, block writes by default, and test any explicit closure option without weakening rollback guarantees.
-- A portable `python3` or shell entrypoint and documented `launchd`, Codex, Claude, and Copilot scheduling paths replace Windows-only launcher assumptions on macOS.
-- macOS CI runs the automated Chrome, Edge, and Firefox suite and performs a native packaging smoke test, while physical Mac validation covers local browser files and permissions that CI cannot reproduce.
-- Safari remains outside this upgrade and is implemented separately under `FUT-011` after the shared macOS platform layer is stable.
-
 ### FUT-011: Safari backup and synchronization on macOS
 
 Add a separate macOS implementation for backing up, previewing, organizing, and synchronizing Safari bookmarks with supported Chromium browsers.
@@ -120,8 +106,19 @@ Acceptance criteria:
 - The feature handles bookmarks only and never exports passwords, history, credit cards, extensions, Reading List data, or open tabs.
 - The tool detects or clearly warns about iCloud Safari synchronization before any write because changes may propagate to other Apple devices.
 - Automated writes require Safari to be closed, prepare and validate all replacements first, preserve recovery data, and provide rollback after a partial failure.
-- Safari support is implemented as a separate macOS adapter and does not weaken Windows Chrome and Edge behavior.
+- Safari support is implemented as a separate macOS adapter and does not weaken existing Windows or macOS Chrome, Edge, and Firefox behavior.
 - Tests cover supported macOS and Safari versions, malformed exports, duplicate handling, iCloud warnings, backup integrity, and failed writes.
+
+### FUT-024: Signed and notarized macOS distribution
+
+Create a versioned macOS application package that is signed with Developer ID, notarized by Apple, and verified before publication.
+
+Acceptance criteria:
+
+- CI builds the macOS artifact from the public repository and signs it with protected credentials.
+- Apple notarization and stapling complete successfully before publication.
+- Verification checks the signature, hardened runtime, notarization ticket, package contents, and SHA-256 checksum.
+- Installation and Gatekeeper verification instructions are documented without weakening the source-based workflow.
 
 ### FUT-014: Notification delivery verification and provider templates
 
