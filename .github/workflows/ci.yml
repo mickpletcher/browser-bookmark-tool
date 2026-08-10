@@ -49,7 +49,7 @@ jobs:
         run: python -m ruff check .
 
       - name: Compile
-        run: python -m py_compile browser_bookmark_sync.py test_sync.py
+        run: python -m py_compile browser_bookmark_sync.py safari_adapter.py test_sync.py
 
       - name: CLI smoke test
         run: python -m browser_bookmark_sync --help
@@ -111,7 +111,7 @@ jobs:
         run: |
           python -m pytest -q
           python -m ruff check .
-          python -m py_compile browser_bookmark_sync.py test_sync.py
+          python -m py_compile browser_bookmark_sync.py safari_adapter.py test_sync.py
           python -m browser_bookmark_sync --help
           ./run-browser-bookmark-tool.sh --help
 

@@ -5,7 +5,7 @@
 [![Cross-platform CI](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Browser Bookmark Tool is a Windows and macOS desktop and command-line application for backing up, exporting, and synchronizing bookmarks between Google Chrome and Microsoft Edge, with optional Firefox import and export.
+Browser Bookmark Tool is a Windows and macOS desktop and command-line application for backing up, exporting, and synchronizing bookmarks between Google Chrome and Microsoft Edge, with optional Firefox import/export and read-only Safari import on macOS.
 
 The synchronization uses a conservative union. A bookmark found in either browser is retained. Deletions are not propagated.
 
@@ -15,7 +15,7 @@ Version: 0.3.0
 
 Release readiness: Source ready; trusted signing credential required for binary release
 
-The GUI, CLI, transactional bookmark workflow, Chrome, Edge, and optional Firefox discovery and process safeguards, shell and PowerShell entrypoints, `launchd` and Task Scheduler generation, and native PyInstaller smoke builds are implemented for Windows and macOS. The current `main` branch uses cross-platform CI and CodeQL. Windows release automation remains blocked until a trusted provider signs and timestamps the executable. macOS binaries are currently local build artifacts and are not signed or notarized. Safari remains a separate future upgrade.
+The GUI, CLI, transactional workflow, browser safeguards, shell and PowerShell entrypoints, schedulers, and native smoke builds remain implemented across the supported platforms. They can also discover, preview, back up, organize, merge, and export Safari bookmarks on macOS without writing to Safari. Direct Safari writes remain open under `FUT-011`. Safari may synchronize bookmark changes through iCloud; this delivery does not attempt any Safari or iCloud modification. Windows signing and macOS signing/notarization remain distribution requirements.
 
 - [Current assessment](assessment.md)
 - [Changelog](changelog.md)
@@ -30,6 +30,7 @@ The GUI, CLI, transactional bookmark workflow, Chrome, Edge, and optional Firefo
 ## Features
 
 - Detects Chrome and Edge `Default` and `Profile *` profiles and parses the standard Firefox `profiles.ini` on Windows and macOS.
+- Discovers `~/Library/Safari/Bookmarks.plist` on macOS, validates the supported version 1 schema, excludes Reading List, and imports bookmarks read-only.
 - Creates timestamped copies of both original `Bookmarks` JSON files.
 - Exports the merged bookmark collection to portable Netscape bookmark HTML.
 - Synchronizes unique bookmarks between Chrome and Edge when requested.
@@ -606,7 +607,7 @@ Backups and the HTML export are created before process termination. The command 
 | `--max-folder-changes` | No | Returns exit code `2` when newer folder additions and reorders exceed this aggregate count. |
 | `--check-automation` | AI or local scheduling | Validates a private automation configuration without creating backups or changing browser files. |
 | `--run-automation` | AI or local scheduling | Executes a private automation configuration under a concurrency lock and writes a privacy-safe JSON result. |
-| `--verify-backup` | Backup verification | Raw Chromium JSON or Firefox SQLite recovery snapshot to validate without changing browser files. |
+| `--verify-backup` | Backup verification | Raw Chromium JSON, Firefox SQLite, or Safari plist recovery snapshot to validate without changing browser files. |
 | `--verify-manifest` | No | Explicit matching manifest path for `--verify-backup`. |
 | `--catalog-backups` | Backup catalog | Groups generated backup files by timestamp and reports count-only status and changes. |
 | `--catalog-filter` | No | Filters the catalog by `all`, `complete`, `incomplete`, `valid`, or `invalid`. |
@@ -616,6 +617,8 @@ Backups and the HTML export are created before process termination. The command 
 | `--firefox-profile` | No | Explicit Firefox profile containing `places.sqlite`; enables Firefox for a direct run. |
 | `--enable-firefox` | No | Uses optional `firefox_profile` paths from named mappings. |
 | `--firefox-export` | No | Adds Firefox as a write target during `--sync`; requires Firefox to be enabled. |
+| `--enable-safari` | No | Discovers the standard macOS Safari bookmark plist and imports it read-only. |
+| `--safari-bookmarks` | No | Uses an explicit Safari `Bookmarks.plist` on macOS, including a copied test file. |
 | `--backup-dir` | No | Output directory. Defaults to `Documents\Browser Bookmark Backups`. |
 | `--profile-map` | No | Private JSON file containing named profile mappings. |
 | `--mapping` | No | Mapping name to process. Repeat for several mappings. |
@@ -645,16 +648,17 @@ Each run creates one portable HTML backup, two raw JSON recovery snapshots, a SH
 Chrome_YYYY-MM-DD_HH-MM-SS_microseconds.json
 Edge_YYYY-MM-DD_HH-MM-SS_microseconds.json
 Firefox_YYYY-MM-DD_HH-MM-SS_microseconds.sqlite  # only when Firefox is enabled
+Safari_YYYY-MM-DD_HH-MM-SS_microseconds.plist    # only when Safari is enabled
 Bookmarks_YYYY-MM-DD_HH-MM-SS_microseconds.html
 Manifest_YYYY-MM-DD_HH-MM-SS_microseconds.json
 browser-bookmark-tool.log
 ```
 
-The HTML file is the portable bookmark backup. It contains the merged collection and can be imported into browsers that support Netscape bookmark HTML. Chrome and Edge JSON files retain Chromium recovery metadata. `Firefox_*.sqlite` is a complete SQLite backup created through SQLite's backup API, including committed WAL data. The manifest records file names, sizes, SHA-256 hashes, and count-only operation data. The tool validates the manifest before retention pruning, can catalog and compare complete backup sets without changing them, and can independently verify Chromium and Firefox recovery snapshots against their matching manifests before restore.
+The HTML file is the portable bookmark backup. Safari input is copied to `Safari_*.plist`, re-parsed, hashed, and included in the same manifest and catalog workflow. It contains bookmarks only: Reading List entries are excluded, and the tool never accesses Safari passwords, history, credit cards, extensions, or tabs. Apple does not publish this plist as a stable bookmark API, so this phase accepts only the observed version 1 schema and fails closed on other versions or node types. macOS privacy controls may require Full Disk Access to read the live Safari plist; granting that access is the user's choice, and copied plist input is supported.
 
-Retention is applied separately to Chrome JSON recovery snapshots, Edge JSON recovery snapshots, Firefox SQLite recovery snapshots, merged HTML backups, and manifests. The tool accepts 1 through 50 backup sets and defaults to 50. Microsecond timestamps prevent repeated runs during the same second from overwriting earlier files. The append-only operation log and pre-restore recovery files are not pruned automatically.
+Retention is applied separately to Chrome JSON recovery snapshots, Edge JSON recovery snapshots, Firefox SQLite recovery snapshots, Safari plist snapshots, merged HTML backups, and manifests. The tool accepts 1 through 50 backup sets and defaults to 50. Microsecond timestamps prevent repeated runs during the same second from overwriting earlier files. The append-only operation log and pre-restore recovery files are not pruned automatically.
 
-Retention is ordered by the timestamp in each generated filename. It does not rely on file modification times, which raw browser copies can inherit from the source file. Pruning only removes regular files that match the tool's generated Chrome JSON, Edge JSON, Firefox SQLite, Bookmarks HTML, or Manifest JSON naming format.
+Retention is ordered by the timestamp in each generated filename. It does not rely on file modification times, which raw browser copies can inherit from the source file. Pruning only removes regular files that match the tool's generated Chrome JSON, Edge JSON, Firefox SQLite, Safari plist, Bookmarks HTML, or Manifest JSON naming format.
 
 ## Privacy and security
 
@@ -748,7 +752,7 @@ The repository Actions allowlist still requires full commit SHA pinning. It perm
 
 The project is applying for SignPath Foundation service as a no-cost alternative. Do not add SignPath credentials, actions, or signing steps until the application is approved and SignPath supplies the project configuration. If accepted, replace the Azure-specific signing step in a reviewed pull request while preserving tag validation, manual signing approval, version-metadata enforcement, signature and timestamp checks, checksums, SBOM generation, provenance, and fail-closed publication. Update the repository Actions allowlist only for exact reviewed and full-SHA-pinned dependencies required by that integration.
 
-The current test suite contains 142 passing cases covering cross-browser matching, Firefox Places import, export, isolated verification and restore, backup ordering and manifests, three-browser rollback, stale sidecars, corrupt and unsupported snapshots, five merge strategies, machine-readable previews and policies, backup cataloging, Chromium recovery, scheduling, automation, process controls, CLI behavior, and GUI errors.
+The current test suite contains 152 passing cases covering read-only Safari discovery, parsing, backup, merge/export, privacy, GUI/CLI behavior, cross-browser matching, Firefox Places import/export/recovery, backup ordering and manifests, rollback, five merge strategies, preview policies, scheduling, automation, and existing-platform regressions.
 
 ## Contributing and support
 

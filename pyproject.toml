@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "browser-bookmark-tool"
 version = "0.3.0"
-description = "Back up and safely synchronize Chrome, Edge, and optional Firefox bookmarks"
+description = "Back up and safely synchronize Chrome, Edge, optional Firefox, and read-only Safari bookmarks"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{name = "Mick Pletcher"}]
 license = "MIT"
 dependencies = []
-keywords = ["bookmarks", "chrome", "edge", "firefox", "macos", "windows"]
+keywords = ["bookmarks", "chrome", "edge", "firefox", "safari", "macos", "windows"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Win32 (MS Windows)",
@@ -41,7 +41,7 @@ Privacy = "https://github.com/mickpletcher/browser-bookmark-tool/blob/main/PRIVA
 "Code signing policy" = "https://github.com/mickpletcher/browser-bookmark-tool/blob/main/CODE_SIGNING_POLICY.md"
 
 [tool.setuptools]
-py-modules = ["browser_bookmark_sync"]
+py-modules = ["browser_bookmark_sync", "safari_adapter"]
 
 [tool.ruff]
 target-version = "py310"
