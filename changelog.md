@@ -8,6 +8,11 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
+- Added isolated, count-only verification of Firefox SQLite recovery snapshots with manifest hashes, SQLite integrity, supported Places schema, and required-root validation.
+- Added GUI and CLI Firefox restore with platform-native process blocking, consistent preservation of the current database, staged replacement, stale WAL and shared-memory cleanup, and rollback-safe failure handling.
+- Added corrupt, mismatched, unsupported-schema, running-process, replacement-failure, sidecar, GUI, CLI, physical-macOS copied-profile, and physical Windows 11 coverage for completed `FUT-018`.
+- Added `FUT-025` cross-platform recovery rehearsal as the replacement candidate for completed `FUT-018`.
+
 - Added native macOS Chrome, Edge, and Firefox profile discovery, platform-specific process safeguards, exact-name explicit closure, and platform-aware restore guards.
 - Added a portable `python3` shell launcher, backup-first `launchd` property-list generation, macOS package metadata, and a SHA-pinned macOS CI test and PyInstaller smoke-build job.
 - Added macOS regression and physical-Mac validation coverage while preserving the complete Windows suite.

@@ -13,13 +13,13 @@ The project is a Windows and macOS application for previewing, reporting, backin
 | Area | Status | Notes |
 | --- | --- | --- |
 | Packaging | Ready from source | Editable installation, module execution, Windows batch and portable shell launchers, and native Windows and macOS PyInstaller smoke builds pass. Public native packages still require platform signing. |
-| Automated tests | Passing | All 135 test cases pass on Python 3.12, including macOS profile discovery, process detection, closure, restore blocking, launchd generation, Firefox workflows, rollback, preview and recovery features, scheduling, CLI, GUI, and Windows regressions. |
-| Backup safety | Ready | Every run creates HTML and Chromium JSON backups plus a validated SHA-256 manifest. Enabled Firefox runs add a consistent SQLite backup before checkpoint or replacement. GUI and CLI cataloging groups and compares generated sets without changing them, while verification currently covers Chromium JSON snapshots. |
+| Automated tests | Passing | All 142 test cases pass on Python 3.12, including isolated Firefox verification and restore, corrupt and unsupported snapshots, manifest mismatch, process blocking, sidecar cleanup, rollback, GUI and CLI paths, macOS compatibility, and Windows regressions. |
+| Backup safety | Ready | Every run creates HTML and Chromium JSON backups plus a validated SHA-256 manifest. Enabled Firefox runs add a consistent SQLite backup before checkpoint or replacement. GUI and CLI verification covers Chromium JSON and Firefox SQLite snapshots in isolated temporary locations. |
 | Synchronization safety | Ready | Chrome and Edge replacements are prepared and validated before writes. Firefox export stages and validates SQLite from its backup. Edge failure restores Chrome, and Firefox replacement failure restores both Chromium files. |
 | Bookmark organization | Ready | Duplicate removal and recursive folder-first alphabetization are independently optional in the GUI and CLI. |
 | URL matching | Ready | Conservative matching changes only scheme and host case. Aggressive whole-URL matching and trailing-slash collapse require explicit opt-in. |
 | Merge and preview | Ready | Five strategies are available. GUI and CLI dry runs make no browser or backup changes. CLI dry runs can atomically create a requested JSON or CSV report, with private bookmark details excluded by default and browser-profile destinations rejected. Version 1 JSON and CSV reports can be compared by mapping without reopening profiles. Direct thresholds or private policies with baseline hashing, exact mapping contracts, and aggregate or per-mapping limits return a distinct policy failure code. Optional atomic count-only JSON results record hashes, counts, limits, violations, and the exit code without local paths or bookmark fields. |
-| Restore | Ready | Chrome and Edge can be restored independently from validated JSON snapshots after preserving the current file. HTML remains a browser-import format. |
+| Restore | Ready | Chrome and Edge restore validated JSON snapshots after preserving the current file. Firefox restore verifies SQLite integrity, schema, roots, and manifest, preserves the current database consistently, removes stale sidecars, and supports rollback. Physical macOS copied-profile and Windows 11 validation pass. |
 | Multi-profile support | Ready | Private named mapping files separate work and personal profiles; optional Firefox paths are ignored unless explicitly enabled. CLI runs one, several, or all mappings. |
 | Integrity and logging | Ready | Manifests validate SHA-256 and size before pruning. Default logs contain operation metadata and counts but no bookmark URLs. |
 | Scheduling | Ready | Local PowerShell and shell entrypoints provide the same private automation contract. Task Scheduler and `launchd` generators default to backup-only operation and never register jobs automatically. |
@@ -29,7 +29,7 @@ The project is a Windows and macOS application for previewing, reporting, backin
 | Browser process handling | Ready | Windows uses `tasklist` and `taskkill`; macOS uses executable names from `ps` and exact-name `pkill`. Running Chrome or Edge blocks writes, and Firefox is checked only when it is an enabled write target. |
 | Repository security | Ready | Secret scanning, push protection, Dependabot, private vulnerability reporting, CodeQL, restricted SHA-pinned Actions, and a solo-maintainer `main` ruleset are enabled. Optional non-provider patterns and validity checks are unavailable. |
 | Documentation | Ready | The README includes the repository social preview and documents current behavior, safety requirements, GUI and CLI use, installation and removal, backup restoration, limitations, download status, privacy, code-signing roles, development checks, contribution rules, support scope, and security reporting. |
-| Upgrade tracking | Good | Completed `FUT-013` is recorded with replacement candidate `FUT-024` for signed and notarized macOS distribution. Safari remains separately tracked under `FUT-011`. |
+| Upgrade tracking | Good | Completed `FUT-018` is recorded with replacement candidate `FUT-025` for cross-platform recovery rehearsal. Safari and signed/notarized macOS distribution remain separately tracked under `FUT-011` and `FUT-024`. |
 
 ## Strengths
 
@@ -91,7 +91,7 @@ No open medium findings.
 - SignPath Foundation has not approved or configured the project. The repository must not add provider-specific signing integration or represent artifacts as SignPath-signed until onboarding details are supplied and reviewed.
 - The existing Azure Artifact Signing account, verified public-trust certificate profile, OIDC federated identity, signer role, environment values, and expected publisher subject are not configured. The workflow intentionally stops before publishing without them.
 - The repository has no version tags, GitHub Releases, downloads, stars, forks, or other project-specific adoption evidence. SignPath requires a project to be released in the form being signed and to have verifiable reputation, so application acceptance remains uncertain. Do not publish an unsigned executable solely to satisfy that condition.
-- Firefox export staging is validated against a copied backup of the current local Places schema and synthetic failure cases. Unsupported schemas fail before replacement. Direct Firefox snapshot verification and restore remain planned under `FUT-018`.
+- Firefox snapshot verification and restore pass against a copied physical-macOS Places database without changing the live profile and pass physical Windows 11 validation. Verification is isolated and count-only; restore preserves the current database, excludes stale WAL and shared-memory sidecars, and fails safely for corrupt, mismatched, unsupported, or blocked inputs.
 
 ## Verification snapshot
 
@@ -100,7 +100,7 @@ Verified on Windows 11 with Python 3.13.3 on 2026-08-08.
 - `py -m pip install -e .`: passed.
 - `py -m browser_bookmark_sync --help`: passed.
 - `Run Browser Bookmark Tool.bat --help`: passed and reached the application through the Python module.
-- `py -m pytest -q`: passed with 129 cases, including explicit Firefox discovery, Places import and export, conservative and aggressive cross-browser matching, backup-before-write ordering, Firefox manifest validation, process blocking, disabled-mode isolation, three-browser rollback, JSON and CSV preview reports, reusable policy profiles, cross-format comparison and policy gates, machine-readable policy results, read-only backup catalog and comparison, Chromium snapshot verification, automation, CLI, and GUI paths.
+- `python -m pytest -q`: passed with 142 cases, including Firefox recovery verification and restore, manifest and schema failures, process blocking, sidecar cleanup, rollback, Chrome and Edge recovery, preview policies, backup cataloging, automation, CLI, and GUI paths.
 - Python 3.11.9 isolated environment: the prior 80-case baseline, Ruff, compilation, and `pip check` passed. The 129-case suite is verified on Python 3.13.3 and awaits CI matrix verification.
 - `py -m ruff check .`: passed with Ruff 0.16.2 and an explicit project rule set.
 - `py -m py_compile browser_bookmark_sync.py test_sync.py`: passed.

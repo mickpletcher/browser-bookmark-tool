@@ -35,6 +35,7 @@ from browser_bookmark_sync import (
     prepare_merged_data,
     prune_backups,
     read_firefox_bookmarks,
+    restore_firefox_backup,
     restore_json_backup,
     run_automation,
     running_browser_processes,
@@ -43,6 +44,7 @@ from browser_bookmark_sync import (
     transactional_firefox_write,
     validate_backup_manifest,
     validate_unique_guids,
+    verify_firefox_backup,
     verify_json_backup,
     write_launchd_plist,
     write_task_scheduler_script,
@@ -2131,6 +2133,52 @@ def test_verify_json_backup_checks_selected_file_against_explicit_manifest(tmp_p
         verify_json_backup(selected, manifest)
 
 
+def firefox_recovery_files(tmp_path: Path, *urls: str) -> tuple[Path, Path]:
+    profile = firefox_profile(tmp_path / "source", *urls)
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    backup = backup_dir / "Firefox_2026-08-09_12-00-00_000000.sqlite"
+    sync_module.backup_firefox_database(profile, backup)
+    manifest = backup_dir / "Manifest_2026-08-09_12-00-00_000000.json"
+    sync_module.write_backup_manifest(manifest, [backup])
+    return backup, manifest
+
+
+def test_verify_firefox_backup_is_isolated_and_count_only(tmp_path: Path):
+    backup, manifest = firefox_recovery_files(tmp_path, "https://firefox.test")
+    before = {path.name: path.read_bytes() for path in backup.parent.iterdir()}
+
+    report = verify_firefox_backup(backup)
+
+    assert report.manifest_path == manifest
+    assert report.bookmark_count == 1
+    assert report.folder_count >= 3
+    assert {path.name: path.read_bytes() for path in backup.parent.iterdir()} == before
+    assert "No live browser files were changed" in report.render()
+
+
+def test_verify_firefox_backup_rejects_corrupt_mismatched_and_unsupported_snapshots(tmp_path: Path):
+    corrupt, corrupt_manifest = firefox_recovery_files(tmp_path / "corrupt", "https://firefox.test")
+    corrupt.write_bytes(b"not sqlite")
+    with pytest.raises(RuntimeError):
+        verify_firefox_backup(corrupt, corrupt_manifest)
+
+    mismatched, mismatched_manifest = firefox_recovery_files(tmp_path / "mismatch", "https://firefox.test")
+    with mismatched.open("ab") as stream:
+        stream.write(b"changed")
+    with pytest.raises(RuntimeError, match="integrity validation failed"):
+        verify_firefox_backup(mismatched, mismatched_manifest)
+
+    unsupported, unsupported_manifest = firefox_recovery_files(tmp_path / "unsupported", "https://firefox.test")
+    connection = sqlite3.connect(unsupported)
+    connection.execute("DROP TABLE moz_keywords")
+    connection.commit()
+    connection.close()
+    sync_module.write_backup_manifest(unsupported_manifest, [unsupported])
+    with pytest.raises(RuntimeError, match="unsupported moz_keywords schema"):
+        verify_firefox_backup(unsupported, unsupported_manifest)
+
+
 def test_cli_verify_backup_prints_concise_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
     backup, manifest = verification_files(tmp_path, data("https://verified.test"))
 
@@ -2171,6 +2219,40 @@ def test_gui_verify_backup_shows_concise_report(tmp_path: Path, monkeypatch: pyt
 
     assert app.status.get() == "Verified 1 bookmarks and 2 folders. No live browser files were changed."
     assert messages == [(f"{sync_module.APP_NAME} Verification", sync_module.verify_json_backup(backup).render())]
+
+
+def test_gui_verifies_and_restores_firefox_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    class Value:
+        def __init__(self, value: str):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value: str):
+            self.value = value
+
+    profile = firefox_profile(tmp_path / "live", "https://current.test")
+    backup, _manifest = firefox_recovery_files(tmp_path / "recovery", "https://restored.test")
+    app = object.__new__(App)
+    app.chrome = Value("")
+    app.edge = Value("")
+    app.firefox = Value(str(profile))
+    app.backups = Value(str(tmp_path / "preserved"))
+    app.status = Value("")
+    messages: list[tuple[str, str]] = []
+    monkeypatch.setattr(sync_module.filedialog, "askopenfilename", lambda **_kwargs: str(backup))
+    monkeypatch.setattr(sync_module.messagebox, "askyesno", lambda *_args: True)
+    monkeypatch.setattr(sync_module.messagebox, "showinfo", lambda title, message: messages.append((title, message)))
+
+    App._verify_backup(app)
+    App._restore(app, "Firefox")
+
+    assert messages[0] == (f"{sync_module.APP_NAME} Verification", verify_firefox_backup(backup).render())
+    assert messages[1][0] == sync_module.APP_NAME
+    assert "Firefox was restored" in messages[1][1]
+    restored_urls = {node["url"] for root in sync_module.read_firefox_bookmarks(profile)["roots"].values() for node in iter_urls(root)}
+    assert restored_urls == {"https://restored.test"}
 
 
 def test_operation_log_does_not_include_bookmark_urls(tmp_path: Path):
@@ -2257,6 +2339,95 @@ def test_macos_restore_blocks_running_target(tmp_path: Path, monkeypatch: pytest
         restore_json_backup(backup_path, profile, "Chrome", tmp_path / "Recovery")
 
     assert json.loads((profile / "Bookmarks").read_text()) == current
+
+
+def test_restore_firefox_backup_preserves_current_and_removes_sidecars(tmp_path: Path):
+    profile = firefox_profile(tmp_path / "live", "https://current.test")
+    backup, _manifest = firefox_recovery_files(tmp_path / "recovery", "https://restored.test")
+    database = profile / "places.sqlite"
+    for sidecar in sync_module.firefox_sidecars(database):
+        sidecar.touch()
+    snapshot_before = backup.read_bytes()
+
+    preserved = restore_firefox_backup(backup, profile, tmp_path / "preserved")
+    assert all(not sidecar.exists() for sidecar in sync_module.firefox_sidecars(database))
+
+    restored_urls = {node["url"] for root in sync_module.read_firefox_bookmarks(profile)["roots"].values() for node in iter_urls(root)}
+    preserved_urls = {
+        node["url"]
+        for root in sync_module.read_firefox_database(preserved)["roots"].values()
+        for node in iter_urls(root)
+    }
+    assert restored_urls == {"https://restored.test"}
+    assert preserved_urls == {"https://current.test"}
+    assert backup.read_bytes() == snapshot_before
+    assert not list(profile.glob("places.pending.*"))
+    assert not list(profile.glob("places.rollback.*"))
+
+
+def test_restore_firefox_blocks_running_process_before_preserving_current(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    profile = firefox_profile(tmp_path / "live", "https://current.test")
+    backup, _manifest = firefox_recovery_files(tmp_path / "recovery", "https://restored.test")
+    original = (profile / "places.sqlite").read_bytes()
+    monkeypatch.setattr(sync_module, "running_firefox_processes", lambda: ["firefox.exe"])
+
+    with pytest.raises(RuntimeError, match="firefox.exe is running"):
+        restore_firefox_backup(backup, profile, tmp_path / "preserved")
+
+    assert (profile / "places.sqlite").read_bytes() == original
+    assert not (tmp_path / "preserved").exists()
+
+
+def test_restore_firefox_replacement_failure_keeps_current_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    profile = firefox_profile(tmp_path / "live", "https://current.test")
+    backup, _manifest = firefox_recovery_files(tmp_path / "recovery", "https://restored.test")
+    database = profile / "places.sqlite"
+    original = database.read_bytes()
+    real_replace = os.replace
+
+    def fail_replacement(source: str | Path, destination: str | Path):
+        if Path(destination) == database and Path(source).name.startswith("places.pending."):
+            raise OSError("simulated replacement failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(sync_module.os, "replace", fail_replacement)
+
+    with pytest.raises(RuntimeError, match="previous database was preserved"):
+        restore_firefox_backup(backup, profile, tmp_path / "preserved")
+
+    assert database.read_bytes() == original
+    assert len(list((tmp_path / "preserved").glob("Firefox_PreRestore_*.sqlite"))) == 1
+    assert not list(profile.glob("places.pending.*"))
+    assert not list(profile.glob("places.rollback.*"))
+
+
+def test_cli_verifies_and_restores_firefox_snapshot(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    profile = firefox_profile(tmp_path / "live", "https://current.test")
+    backup, manifest = firefox_recovery_files(tmp_path / "recovery", "https://restored.test")
+
+    assert main(["--verify-backup", str(backup), "--verify-manifest", str(manifest)]) == 0
+    assert "Backup verification passed" in capsys.readouterr().out
+    assert main(
+        [
+            "--restore-backup",
+            str(backup),
+            "--restore-browser",
+            "Firefox",
+            "--firefox-profile",
+            str(profile),
+            "--backup-dir",
+            str(tmp_path / "preserved"),
+        ]
+    ) == 0
+    assert "Restored Firefox" in capsys.readouterr().out
+    restored_urls = {node["url"] for root in sync_module.read_firefox_bookmarks(profile)["roots"].values() for node in iter_urls(root)}
+    assert restored_urls == {"https://restored.test"}
 
 
 def test_task_scheduler_script_defaults_to_backup_only(tmp_path: Path):
