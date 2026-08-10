@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "kind": "preview-policy",
+  "baseline_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "expected_mappings": [
+    "Personal",
+    "Work"
+  ],
+  "aggregate_limits": {
+    "max_planned_additions": 25,
+    "max_duplicate_removals": 10,
+    "max_folder_changes": 5
+  },
+  "mapping_limits": [
+    {
+      "mapping": "Work",
+      "max_planned_additions": 10,
+      "max_folder_changes": 2
+    }
+  ]
+}

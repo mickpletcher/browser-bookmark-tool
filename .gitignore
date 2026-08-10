@@ -29,6 +29,8 @@ browser-bookmark-automation-health*.json
 browser-bookmark-automation*.lock*
 browser-bookmark-preview*.json
 browser-bookmark-preview*.csv
+preview-policy*.json
+!preview-policy.example.json
 register-bookmark-task*.ps1
 
 # C extensions

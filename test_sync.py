@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import json
 import os
 import shutil
@@ -1237,6 +1238,25 @@ def comparison_entry(
     return entry
 
 
+def write_preview_policy(
+    path: Path,
+    baseline: Path,
+    expected_mappings: list[str],
+    aggregate_limits: dict[str, int] | None = None,
+    mapping_limits: list[dict] | None = None,
+) -> Path:
+    document = {
+        "schema_version": 1,
+        "kind": "preview-policy",
+        "baseline_sha256": hashlib.sha256(baseline.read_bytes()).hexdigest(),
+        "expected_mappings": expected_mappings,
+        "aggregate_limits": aggregate_limits or {},
+        "mapping_limits": mapping_limits or [],
+    }
+    path.write_text(json.dumps(document, indent=2))
+    return path
+
+
 def test_preview_report_comparison_matches_json_and_csv_mappings_and_reports_differences(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -1388,6 +1408,202 @@ def test_preview_report_comparison_reads_only_input_reports(
     assert main(["--compare-preview-reports", str(older), str(newer)]) == 0
     after = {path.name: path.read_bytes() for path in directory.iterdir()}
     assert after == before
+
+
+def test_preview_policy_enforces_aggregate_and_per_mapping_overrides(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    older = tmp_path / "older.json"
+    newer = tmp_path / "newer.csv"
+    policy = tmp_path / "preview-policy.private.json"
+    sync_module.write_preview_report(
+        older,
+        [comparison_entry("Personal"), comparison_entry("Work")],
+    )
+    sync_module.write_preview_report(
+        newer,
+        [
+            comparison_entry("Personal", planned_additions=5, duplicates_removed=1),
+            comparison_entry("Work", planned_additions=2, folders_added=1),
+        ],
+    )
+    arguments = ["--compare-preview-reports", str(older), str(newer), "--preview-policy", str(policy)]
+
+    write_preview_policy(
+        policy,
+        older,
+        ["Personal", "Work"],
+        {"max_planned_additions": 6, "max_duplicate_removals": 1, "max_folder_changes": 1},
+    )
+    assert main(arguments) == 2
+    assert "planned additions 7 exceeds 6" in capsys.readouterr().out
+
+    write_preview_policy(
+        policy,
+        older,
+        ["Personal", "Work"],
+        {"max_planned_additions": 7, "max_duplicate_removals": 1, "max_folder_changes": 1},
+        [{"mapping": "Work", "max_planned_additions": 1}],
+    )
+    assert main(arguments) == 2
+    assert "Work planned additions 2 exceeds 1" in capsys.readouterr().out
+
+    write_preview_policy(
+        policy,
+        older,
+        ["Personal", "Work"],
+        {"max_planned_additions": 7, "max_duplicate_removals": 1, "max_folder_changes": 1},
+        [{"mapping": "Work", "max_planned_additions": 2}],
+    )
+    assert main(arguments) == 0
+    output = capsys.readouterr().out
+    assert "Preview policy: preview-policy.private.json; baseline SHA-256 verified." in output
+    assert "Policy gate passed." in output
+
+
+def test_preview_policy_rejects_baseline_hash_mismatch(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    older = tmp_path / "older.json"
+    newer = tmp_path / "newer.json"
+    policy = tmp_path / "preview-policy.private.json"
+    sync_module.write_preview_report(older, [comparison_entry("Personal")])
+    sync_module.write_preview_report(newer, [comparison_entry("Personal")])
+    write_preview_policy(policy, older, ["Personal"], {"max_planned_additions": 5})
+    document = json.loads(policy.read_text())
+    document["baseline_sha256"] = "f" * 64
+    policy.write_text(json.dumps(document))
+
+    assert main(["--compare-preview-reports", str(older), str(newer), "--preview-policy", str(policy)]) == 1
+    assert "baseline SHA-256 does not match" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("expected", "entries", "message"),
+    [
+        (["Personal", "Work"], ["Personal"], "mapping(s) missing from older report: Work"),
+        (["Personal"], ["Personal", "Work"], "unexpected mapping(s) in older report: Work"),
+    ],
+)
+def test_preview_policy_fails_closed_for_missing_or_unexpected_mappings(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    expected: list[str],
+    entries: list[str],
+    message: str,
+):
+    older = tmp_path / "older.json"
+    newer = tmp_path / "newer.json"
+    policy = tmp_path / "preview-policy.private.json"
+    report_entries = [comparison_entry(name) for name in entries]
+    sync_module.write_preview_report(older, report_entries)
+    sync_module.write_preview_report(newer, report_entries)
+    write_preview_policy(policy, older, expected, {"max_planned_additions": 10})
+
+    assert main(["--compare-preview-reports", str(older), str(newer), "--preview-policy", str(policy)]) == 1
+    assert message in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"schema_version": 2},
+        {"baseline_sha256": "not-a-sha256"},
+        {"expected_mappings": ["Personal", "Personal"]},
+        {"aggregate_limits": {"max_planned_additions": -1}},
+        {"mapping_limits": [{"mapping": "Unknown", "max_folder_changes": 1}]},
+    ],
+)
+def test_preview_policy_rejects_malformed_documents(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    change: dict,
+):
+    older = tmp_path / "older.json"
+    newer = tmp_path / "newer.json"
+    policy = tmp_path / "preview-policy.private.json"
+    sync_module.write_preview_report(older, [comparison_entry("Personal")])
+    sync_module.write_preview_report(newer, [comparison_entry("Personal")])
+    write_preview_policy(policy, older, ["Personal"], {"max_planned_additions": 5})
+    document = json.loads(policy.read_text())
+    document.update(change)
+    policy.write_text(json.dumps(document))
+
+    assert main(["--compare-preview-reports", str(older), str(newer), "--preview-policy", str(policy)]) == 1
+    assert "Error: Preview policy" in capsys.readouterr().err
+
+
+def test_preview_policy_comparison_is_private_and_read_only(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    directory = tmp_path / "private-reports"
+    older = directory / "older-private.json"
+    newer = directory / "newer-private.json"
+    policy = directory / "preview-policy.private.json"
+    sync_module.write_preview_report(older, [comparison_entry("Personal", details=True)], True)
+    sync_module.write_preview_report(newer, [comparison_entry("Personal", details=True)], True)
+    write_preview_policy(policy, older, ["Personal"], {"max_planned_additions": 5})
+    before = {path.name: path.read_bytes() for path in directory.iterdir()}
+    monkeypatch.setattr(
+        sync_module,
+        "preview_synchronization_data",
+        lambda *_args, **_kwargs: pytest.fail("browser profile opened"),
+    )
+    monkeypatch.setattr(sync_module, "prune_backups", lambda *_args, **_kwargs: pytest.fail("backup changed"))
+
+    assert main(
+        [
+            "--compare-preview-reports",
+            str(older),
+            str(newer),
+            "--preview-policy",
+            str(policy),
+            "--acknowledge-private-preview-details",
+        ]
+    ) == 0
+    output = capsys.readouterr().out
+    assert "private-comparison.test" not in output
+    assert "Private comparison bookmark" not in output
+    assert str(directory) not in output
+    assert {path.name: path.read_bytes() for path in directory.iterdir()} == before
+
+
+def test_preview_policy_example_is_valid_and_private_variants_are_ignored():
+    example = Path("preview-policy.example.json")
+    policy = sync_module.load_preview_policy(example)
+    ignore = Path(".gitignore").read_text()
+
+    assert policy.expected_mappings == ("Personal", "Work")
+    assert "preview-policy*.json" in ignore
+    assert "!preview-policy.example.json" in ignore
+
+
+def test_preview_policy_cli_rejects_incomplete_or_conflicting_options(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    policy = tmp_path / "preview-policy.private.json"
+    assert main(["--preview-policy", str(policy)]) == 1
+    assert "require --compare-preview-reports" in capsys.readouterr().err
+
+    older = tmp_path / "older.json"
+    newer = tmp_path / "newer.json"
+    sync_module.write_preview_report(older, [comparison_entry("Personal")])
+    sync_module.write_preview_report(newer, [comparison_entry("Personal")])
+    write_preview_policy(policy, older, ["Personal"], {"max_planned_additions": 5})
+    assert main(
+        [
+            "--compare-preview-reports",
+            str(older),
+            str(newer),
+            "--preview-policy",
+            str(policy),
+            "--max-planned-additions",
+            "5",
+        ]
+    ) == 1
+    assert "cannot be combined" in capsys.readouterr().err
 
 
 def test_manifest_validates_and_detects_tampering(tmp_path: Path):

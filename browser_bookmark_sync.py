@@ -38,6 +38,12 @@ MERGE_STRATEGIES = ("chrome-wins", "edge-wins", "preserve-both", "merge-folders"
 BACKUP_CATALOG_FILTERS = ("all", "complete", "incomplete", "valid", "invalid")
 AUTOMATION_SCHEMA_VERSION = 1
 PREVIEW_REPORT_SCHEMA_VERSION = 1
+PREVIEW_POLICY_SCHEMA_VERSION = 1
+PREVIEW_POLICY_LIMITS = {
+    "max_planned_additions": "planned additions",
+    "max_duplicate_removals": "duplicate removals",
+    "max_folder_changes": "folder changes",
+}
 PREVIEW_REPORT_SETTINGS = {
     "merge_strategy": str,
     "duplicate_mode": str,
@@ -1691,15 +1697,31 @@ class PreviewReport:
 
 
 @dataclass(frozen=True)
+class PreviewPolicy:
+    source: Path
+    baseline_sha256: str
+    expected_mappings: tuple[str, ...]
+    aggregate_limits: dict[str, int]
+    mapping_limits: dict[str, dict[str, int]]
+
+
+@dataclass(frozen=True)
 class PreviewReportComparison:
     older: PreviewReport
     newer: PreviewReport
     max_planned_additions: int | None = None
     max_duplicate_removals: int | None = None
     max_folder_changes: int | None = None
+    policy_source: Path | None = None
+    mapping_limits: dict[str, dict[str, int]] | None = None
 
-    def policy_counts(self) -> dict[str, int]:
-        changes = [mapping["changes"] for mapping in self.newer.mappings.values()]
+    def policy_counts(self, mapping_name: str | None = None) -> dict[str, int]:
+        selected = (
+            (self.newer.mappings[mapping_name],)
+            if mapping_name is not None
+            else self.newer.mappings.values()
+        )
+        changes = [mapping["changes"] for mapping in selected]
         return {
             "planned additions": sum(
                 change[metric]
@@ -1719,11 +1741,26 @@ class PreviewReportComparison:
             "duplicate removals": self.max_duplicate_removals,
             "folder changes": self.max_folder_changes,
         }
-        return tuple(
+        violations = [
             f"{label} {counts[label]} exceeds {limit}"
             for label, limit in thresholds.items()
             if limit is not None and counts[label] > limit
-        )
+        ]
+        for mapping_name, overrides in sorted((self.mapping_limits or {}).items()):
+            mapping_counts = self.policy_counts(mapping_name)
+            effective = {
+                "max_planned_additions": self.max_planned_additions,
+                "max_duplicate_removals": self.max_duplicate_removals,
+                "max_folder_changes": self.max_folder_changes,
+                **overrides,
+            }
+            violations.extend(
+                f"{mapping_name} {PREVIEW_POLICY_LIMITS[key]} "
+                f"{mapping_counts[PREVIEW_POLICY_LIMITS[key]]} exceeds {limit}"
+                for key, limit in effective.items()
+                if limit is not None and mapping_counts[PREVIEW_POLICY_LIMITS[key]] > limit
+            )
+        return tuple(violations)
 
     def render(self) -> str:
         lines = [f"Preview report comparison: {self.older.source.name} to {self.newer.source.name}"]
@@ -1762,6 +1799,8 @@ class PreviewReportComparison:
         if not changed and older_names == newer_names:
             lines.append("No settings or count changes.")
 
+        if self.policy_source:
+            lines.append(f"Preview policy: {self.policy_source.name}; baseline SHA-256 verified.")
         counts = self.policy_counts()
         lines.append(
             "Newer report policy counts: "
@@ -1772,7 +1811,7 @@ class PreviewReportComparison:
         violations = self.policy_violations()
         if violations:
             lines.append(f"Policy gate failed: {'; '.join(violations)}.")
-        elif any(
+        elif self.policy_source or any(
             limit is not None
             for limit in (
                 self.max_planned_additions,
@@ -1940,6 +1979,98 @@ def load_preview_report(path: Path, acknowledge_private_details: bool = False) -
     return report
 
 
+def preview_policy_limits(value: Any, context: str) -> dict[str, int]:
+    if not isinstance(value, dict) or not set(value).issubset(PREVIEW_POLICY_LIMITS):
+        raise RuntimeError(f"Preview policy {context} contains invalid limit names.")
+    limits: dict[str, int] = {}
+    for key, limit in value.items():
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
+            raise RuntimeError(f"Preview policy {context}.{key} must be a non-negative integer.")
+        limits[key] = limit
+    return limits
+
+
+def load_preview_policy(path: Path) -> PreviewPolicy:
+    if path.suffix.casefold() != ".json":
+        raise RuntimeError("Preview policy path must end in .json.")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Could not read preview policy {path}.") from exc
+    required = {
+        "schema_version",
+        "kind",
+        "baseline_sha256",
+        "expected_mappings",
+        "aggregate_limits",
+    }
+    if not isinstance(document, dict) or not required.issubset(document) or set(document) - (required | {"mapping_limits"}):
+        raise RuntimeError(f"Preview policy {path} has an invalid document shape.")
+    if (
+        not isinstance(document["schema_version"], int)
+        or isinstance(document["schema_version"], bool)
+        or document["schema_version"] != PREVIEW_POLICY_SCHEMA_VERSION
+        or document["kind"] != "preview-policy"
+    ):
+        raise RuntimeError(f"Preview policy {path} uses an unsupported schema.")
+    baseline_sha256 = document["baseline_sha256"]
+    if not isinstance(baseline_sha256, str) or re.fullmatch(r"[0-9a-fA-F]{64}", baseline_sha256) is None:
+        raise RuntimeError(f"Preview policy {path} has an invalid baseline_sha256.")
+    expected_value = document["expected_mappings"]
+    if (
+        not isinstance(expected_value, list)
+        or not expected_value
+        or any(not isinstance(name, str) or not name for name in expected_value)
+        or len(expected_value) != len(set(expected_value))
+    ):
+        raise RuntimeError(f"Preview policy {path} expected_mappings must contain unique non-empty names.")
+
+    aggregate_limits = preview_policy_limits(document["aggregate_limits"], "aggregate_limits")
+    mapping_value = document.get("mapping_limits", [])
+    if not isinstance(mapping_value, list):
+        raise RuntimeError(f"Preview policy {path} mapping_limits must be a list.")
+    mapping_limits: dict[str, dict[str, int]] = {}
+    for item in mapping_value:
+        if not isinstance(item, dict) or not isinstance(item.get("mapping"), str):
+            raise RuntimeError(f"Preview policy {path} contains an invalid mapping limit.")
+        name = item["mapping"]
+        if name not in expected_value:
+            raise RuntimeError(f"Preview policy {path} has limits for unexpected mapping {name}.")
+        if name in mapping_limits:
+            raise RuntimeError(f"Preview policy {path} contains duplicate limits for mapping {name}.")
+        limits = preview_policy_limits({key: value for key, value in item.items() if key != "mapping"}, name)
+        if not limits:
+            raise RuntimeError(f"Preview policy {path} mapping {name} contains no limits.")
+        mapping_limits[name] = limits
+    if not aggregate_limits and not mapping_limits:
+        raise RuntimeError(f"Preview policy {path} contains no policy limits.")
+    return PreviewPolicy(
+        path,
+        baseline_sha256.casefold(),
+        tuple(expected_value),
+        aggregate_limits,
+        mapping_limits,
+    )
+
+
+def validate_preview_policy(policy: PreviewPolicy, older_path: Path, older: PreviewReport, newer: PreviewReport) -> None:
+    try:
+        baseline_sha256 = sha256_file(older_path)
+    except OSError as exc:
+        raise RuntimeError(f"Could not hash baseline preview report {older_path}.") from exc
+    if baseline_sha256 != policy.baseline_sha256:
+        raise RuntimeError("Preview policy baseline SHA-256 does not match the older report.")
+    expected = set(policy.expected_mappings)
+    for label, report in (("older", older), ("newer", newer)):
+        actual = set(report.mappings)
+        missing = sorted(expected - actual)
+        unexpected = sorted(actual - expected)
+        if missing:
+            raise RuntimeError(f"Preview policy mapping(s) missing from {label} report: {', '.join(missing)}.")
+        if unexpected:
+            raise RuntimeError(f"Preview policy found unexpected mapping(s) in {label} report: {', '.join(unexpected)}.")
+
+
 def compare_preview_reports(
     older_path: Path,
     newer_path: Path,
@@ -1947,15 +2078,27 @@ def compare_preview_reports(
     max_planned_additions: int | None = None,
     max_duplicate_removals: int | None = None,
     max_folder_changes: int | None = None,
+    policy: PreviewPolicy | None = None,
 ) -> PreviewReportComparison:
     older = load_preview_report(older_path, acknowledge_private_details)
     newer = load_preview_report(newer_path, acknowledge_private_details)
+    policy_source = None
+    mapping_limits = None
+    if policy:
+        validate_preview_policy(policy, older_path, older, newer)
+        max_planned_additions = policy.aggregate_limits.get("max_planned_additions")
+        max_duplicate_removals = policy.aggregate_limits.get("max_duplicate_removals")
+        max_folder_changes = policy.aggregate_limits.get("max_folder_changes")
+        policy_source = policy.source
+        mapping_limits = policy.mapping_limits
     return PreviewReportComparison(
         older,
         newer,
         max_planned_additions,
         max_duplicate_removals,
         max_folder_changes,
+        policy_source,
+        mapping_limits,
     )
 
 
@@ -3383,6 +3526,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Allow comparison of reports that explicitly contain private bookmark details",
     )
     parser.add_argument(
+        "--preview-policy",
+        type=Path,
+        help="Private versioned JSON policy for repeatable preview comparison gates",
+    )
+    parser.add_argument(
         "--max-planned-additions",
         type=non_negative_integer,
         help="Fail preview comparison when newer URL additions exceed this count",
@@ -3439,6 +3587,7 @@ def main(argv: list[str] | None = None) -> int:
             args.preview_report,
             args.include_bookmark_details,
             args.acknowledge_private_preview_details,
+            args.preview_policy,
             args.max_planned_additions is not None,
             args.max_duplicate_removals is not None,
             args.max_folder_changes is not None,
@@ -3458,24 +3607,35 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     preview_comparison_options = (
         args.acknowledge_private_preview_details
+        or args.preview_policy
         or args.max_planned_additions is not None
         or args.max_duplicate_removals is not None
         or args.max_folder_changes is not None
     )
     if preview_comparison_options and not args.compare_preview_reports:
         print(
-            "Error: preview comparison acknowledgments and thresholds require --compare-preview-reports.",
+            "Error: preview comparison acknowledgments, policies, and thresholds require --compare-preview-reports.",
             file=sys.stderr,
         )
         return 1
+    direct_preview_thresholds = (
+        args.max_planned_additions is not None
+        or args.max_duplicate_removals is not None
+        or args.max_folder_changes is not None
+    )
+    if args.preview_policy and direct_preview_thresholds:
+        print("Error: --preview-policy cannot be combined with direct preview threshold options.", file=sys.stderr)
+        return 1
     if args.compare_preview_reports:
         try:
+            policy = load_preview_policy(args.preview_policy) if args.preview_policy else None
             comparison = compare_preview_reports(
                 *args.compare_preview_reports,
                 acknowledge_private_details=args.acknowledge_private_preview_details,
                 max_planned_additions=args.max_planned_additions,
                 max_duplicate_removals=args.max_duplicate_removals,
                 max_folder_changes=args.max_folder_changes,
+                policy=policy,
             )
         except RuntimeError as exc:
             print(f"Error: {exc}", file=sys.stderr)

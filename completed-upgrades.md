@@ -108,3 +108,10 @@ The following capabilities were already complete when the upgrade tracking files
 - Release: Unreleased
 - Summary: Adds read-only comparison of version 1 JSON and CSV preview reports matched by mapping name. Count-only output covers settings, browser counts, planned additions, duplicates, and folder changes. Optional aggregate thresholds return exit code `2`, while detailed reports require an explicit private-data acknowledgment and still never print bookmark details.
 - Verification: The 110-case suite covers cross-format schema validation, missing and duplicate mappings, settings and count changes, passing and failing policy thresholds, detailed-report rejection and acknowledgment, count-only output, and exact before-and-after input-directory equality. Ruff and Python compilation pass.
+
+### FUT-021: Reusable preview policy profiles
+
+- Completed: 2026-08-09
+- Release: Unreleased
+- Summary: Adds private version 1 JSON policies with an exact baseline report SHA-256, expected mapping contract, aggregate count limits, and optional per-mapping overrides. Policies fail closed on malformed schemas, baseline mismatches, missing or unexpected mappings, and conflicting direct thresholds. A sanitized path-free example is tracked while real policies remain ignored.
+- Verification: The 122-case suite covers aggregate and per-mapping limits, inherited defaults, baseline hash validation, missing and unexpected mappings, malformed versions, hashes, names, and limits, detailed-report acknowledgment, privacy-safe output, CLI conflicts, the sanitized example, and exact no-write behavior. Ruff and Python compilation pass.

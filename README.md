@@ -52,7 +52,7 @@ The GUI, CLI, standalone build, automated tests, transactional writes, machine-r
 - Uses conservative URL matching by default and keeps aggressive matching opt-in.
 - Provides five merge strategies and a no-write dry-run report.
 - Writes optional atomic JSON or CSV dry-run reports with settings, counts, and change categories while excluding bookmark details by default.
-- Compares JSON and CSV preview reports by mapping without reopening browser profiles and can enforce aggregate count-only policy thresholds.
+- Compares JSON and CSV preview reports by mapping without reopening browser profiles and can enforce direct thresholds or reusable private count-only policy profiles.
 - Verifies JSON recovery snapshots in a temporary Chromium profile without changing live browser files.
 - Restores Chrome or Edge independently from raw JSON recovery snapshots.
 - Saves and loads private named profile mappings and processes several mappings from the CLI.
@@ -365,6 +365,26 @@ The policy counts come from the newer report and are aggregated across its mappi
 
 Detailed reports are rejected by default. Add `--acknowledge-private-preview-details` only after confirming both inputs may be processed locally. The comparison still prints count-only output and never prints bookmark names, URLs, or folder paths.
 
+For repeatable gates, copy [preview-policy.example.json](preview-policy.example.json) outside the repository. Replace `baseline_sha256` with the SHA-256 of the exact older report and list every expected mapping. The policy contains no report paths:
+
+```powershell
+$baseline = "D:\Private\browser-bookmark-preview-baseline.json"
+$policy = "D:\Private\preview-policy.json"
+$hash = (Get-FileHash -LiteralPath $baseline -Algorithm SHA256).Hash.ToLowerInvariant()
+```
+
+Set the calculated `$hash` as `baseline_sha256`, review the aggregate limits, and add only the per-mapping overrides that need stricter limits. Then run:
+
+```powershell
+py -m browser_bookmark_sync `
+  --compare-preview-reports `
+  $baseline `
+  "D:\Private\browser-bookmark-preview-current.json" `
+  --preview-policy $policy
+```
+
+The version 1 policy fails closed when the baseline hash differs, either report is missing an expected mapping, either report contains an unexpected mapping, or the policy schema is invalid. Aggregate limits apply to the entire newer report. A mapping entry inherits omitted aggregate values and overrides the limits it specifies. Direct threshold options cannot be combined with `--preview-policy`.
+
 ### Include Firefox
 
 Firefox stays disabled unless an explicit profile is supplied. This command imports Firefox into the merged union and writes Chrome and Edge only:
@@ -533,6 +553,7 @@ Backups and the HTML export are created before process termination. The command 
 | `--include-bookmark-details` | No | Explicitly includes private bookmark names, URLs, and folder paths in `--preview-report`. |
 | `--compare-preview-reports` | Preview comparison | Older and newer version 1 JSON or CSV reports to compare by mapping. |
 | `--acknowledge-private-preview-details` | No | Allows local comparison of detailed reports while keeping output count-only. |
+| `--preview-policy` | No | Private versioned JSON policy containing the baseline hash, expected mappings, aggregate limits, and optional per-mapping overrides. |
 | `--max-planned-additions` | No | Returns exit code `2` when newer URL additions exceed this aggregate count. |
 | `--max-duplicate-removals` | No | Returns exit code `2` when newer duplicate removals exceed this aggregate count. |
 | `--max-folder-changes` | No | Returns exit code `2` when newer folder additions and reorders exceed this aggregate count. |
@@ -590,7 +611,7 @@ Retention is ordered by the timestamp in each generated filename. It does not re
 
 ## Privacy and security
 
-Bookmark files, Firefox `places.sqlite` databases, backups, preview reports, profile mappings, automation configurations, and private scheduler outputs can expose browsing history, internal URLs, access tokens embedded in URLs, usernames, and private filesystem paths. Store them outside the repository and do not attach real data to issues, prompts, pull requests, or cloud artifacts. Detailed preview comparison requires an explicit acknowledgment and still emits count-only output. The project `.gitignore` blocks browser bookmark files, generated backups, standard preview report names, logs, restore snapshots, task scripts, private profile mappings, automation results, health histories, and lock files as a secondary safeguard. Notification commands must obtain credentials from a private local mechanism instead of command arguments. Only the sanitized mapping and automation examples belong in Git.
+Bookmark files, Firefox `places.sqlite` databases, backups, preview reports, preview policies, profile mappings, automation configurations, and private scheduler outputs can expose browsing history, internal URLs, access tokens embedded in URLs, usernames, mapping names, and private filesystem paths. Store them outside the repository and do not attach real data to issues, prompts, pull requests, or cloud artifacts. Detailed preview comparison requires an explicit acknowledgment and still emits count-only output. The project `.gitignore` blocks browser bookmark files, generated backups, standard preview report and private policy names, logs, restore snapshots, task scripts, private profile mappings, automation results, health histories, and lock files as a secondary safeguard. Only sanitized examples belong in Git. Notification commands must obtain credentials from a private local mechanism instead of command arguments.
 
 Report security vulnerabilities privately through GitHub. See the [security policy](SECURITY.md) for the reporting process and evidence requirements.
 
