@@ -1,25 +1,25 @@
 # Browser Bookmark Tool Assessment
 
-Last reviewed: 2026-08-09
+Last reviewed: 2026-08-10
 Project version: 0.3.0
 Release readiness: Source ready; trusted signing credential required for binary release
 
 ## Summary
 
-The project is a Windows and macOS application for previewing, reporting, backing up, exporting, cataloging, comparing, verifying, restoring, and organizing Chrome bookmarks and Microsoft Edge favorites, with disabled-by-default Firefox import and export. Version 0.3.0 combines transactional write and platform-native browser-process protections with privacy-safe machine-readable previews, backup recovery, local scheduling, and native CI smoke builds. Windows signed distribution still requires a trusted provider. macOS distribution is source-ready but requires Developer ID signing and Apple notarization before public binaries are published.
+The project is a Windows and macOS application for previewing, reporting, backing up, exporting, cataloging, comparing, verifying, rehearsing recovery, restoring, and organizing Chrome bookmarks and Microsoft Edge favorites, with disabled-by-default Firefox import and export. Version 0.3.0 combines transactional write and platform-native browser-process protections with privacy-safe machine-readable previews, isolated backup recovery, local scheduling, and native CI smoke builds. Windows signed distribution still requires a trusted provider. macOS distribution is source-ready but requires Developer ID signing and Apple notarization before public binaries are published.
 
 ## Current status
 
 | Area | Status | Notes |
 | --- | --- | --- |
 | Packaging | Ready from source | Editable installation, module execution, Windows batch and portable shell launchers, and native Windows and macOS PyInstaller smoke builds pass. Public native packages still require platform signing. |
-| Automated tests | Passing | All 154 test cases pass on Python 3.12, including read-only Safari discovery, parsing, backup, merge/export, guided import preparation, privacy, GUI/CLI paths, isolated Firefox verification and restore, macOS compatibility, and Windows regressions. |
-| Backup safety | Ready | Every run creates HTML and Chromium JSON backups plus a validated SHA-256 manifest. Enabled Firefox runs add a consistent SQLite backup; enabled Safari runs add a validated, read-only plist copy. GUI and CLI verification covers Chromium JSON, Firefox SQLite, and Safari plist snapshots. |
+| Automated tests | Passing | All 160 test cases pass on Windows, including cross-platform recovery rehearsal, complete and failed backup sets, read-only Safari discovery, parsing, backup, merge/export, guided import preparation, privacy, GUI/CLI paths, isolated Firefox verification and restore, macOS behavior, and Windows regressions. |
+| Backup safety | Ready | Every run creates HTML and Chromium JSON backups plus a validated SHA-256 manifest. Enabled Firefox runs add a consistent SQLite backup; enabled Safari runs add a validated, read-only plist copy. GUI and CLI verification covers Chromium JSON, Firefox SQLite, and Safari plist snapshots. A count-only rehearsal restores complete sets into temporary profiles only. |
 | Synchronization safety | Ready | Chrome and Edge replacements are prepared and validated before writes. Firefox export stages and validates SQLite from its backup. Edge failure restores Chrome, and Firefox replacement failure restores both Chromium files. |
 | Bookmark organization | Ready | Duplicate removal and recursive folder-first alphabetization are independently optional in the GUI and CLI. |
 | URL matching | Ready | Conservative matching changes only scheme and host case. Aggressive whole-URL matching and trailing-slash collapse require explicit opt-in. |
 | Merge and preview | Ready | Five strategies are available. GUI and CLI dry runs make no browser or backup changes. CLI dry runs can atomically create a requested JSON or CSV report, with private bookmark details excluded by default and browser-profile destinations rejected. Version 1 JSON and CSV reports can be compared by mapping without reopening profiles. Direct thresholds or private policies with baseline hashing, exact mapping contracts, and aggregate or per-mapping limits return a distinct policy failure code. Optional atomic count-only JSON results record hashes, counts, limits, violations, and the exit code without local paths or bookmark fields. |
-| Restore | Ready | Chrome and Edge restore validated JSON snapshots after preserving the current file. Firefox restore verifies SQLite integrity, schema, roots, and manifest, preserves the current database consistently, removes stale sidecars, and supports rollback. Physical macOS copied-profile and Windows 11 validation pass. |
+| Restore | Ready | Chrome and Edge restore validated JSON snapshots after preserving the current file. Firefox restore verifies SQLite integrity, schema, roots, and manifest, preserves the current database consistently, removes stale sidecars, and supports rollback. Complete-set rehearsal restores represented Chromium, Firefox, and Safari artifacts into isolated temporary profiles without live-profile access. Physical macOS copied-profile and Windows 11 validation pass. |
 | Multi-profile support | Ready | Private named mapping files separate work and personal profiles; optional Firefox paths are ignored unless explicitly enabled. CLI runs one, several, or all mappings. |
 | Integrity and logging | Ready | Manifests validate SHA-256 and size before pruning, including optional Safari plist members. Default logs contain operation metadata and counts but no bookmark URLs, titles, or profile paths. |
 | Scheduling | Ready | Local PowerShell and shell entrypoints provide the same private automation contract. Task Scheduler and `launchd` generators default to backup-only operation and never register jobs automatically. |
@@ -29,7 +29,7 @@ The project is a Windows and macOS application for previewing, reporting, backin
 | Browser process handling | Ready | Windows uses `tasklist` and `taskkill`; macOS uses executable names from `ps` and exact-name `pkill`. Running Chrome or Edge blocks writes, and Firefox is checked only when it is an enabled write target. |
 | Repository security | Ready | Secret scanning, push protection, Dependabot, private vulnerability reporting, CodeQL, restricted SHA-pinned Actions, and a solo-maintainer `main` ruleset are enabled. Optional non-provider patterns and validity checks are unavailable. |
 | Documentation | Ready | The README includes the repository social preview and documents current behavior, safety requirements, GUI and CLI use, installation and removal, backup restoration, limitations, download status, privacy, code-signing roles, development checks, contribution rules, support scope, and security reporting. |
-| Upgrade tracking | Good | Completed `FUT-018` is recorded with replacement candidate `FUT-025` for cross-platform recovery rehearsal. Safari and signed/notarized macOS distribution remain separately tracked under `FUT-011` and `FUT-024`. |
+| Upgrade tracking | Good | Completed `FUT-025` is recorded with replacement candidate `FUT-026` for recovery-readiness history and freshness policy. Safari and signed/notarized macOS distribution remain separately tracked under `FUT-011` and `FUT-024`. |
 
 ## Strengths
 
@@ -60,6 +60,7 @@ The project is a Windows and macOS application for previewing, reporting, backin
 - Verifies recovery snapshots in isolated temporary profiles and reports only bookmark counts, folder counts, manifest name, and no-write status.
 - Catalogs generated backup sets without opening live profiles, distinguishes completeness from validity, flags missing or extra members, and reports only browser types and counts.
 - Compares only complete, valid sets and uses SQLite immutable mode so Firefox inventory cannot create recovery-directory sidecars.
+- Rehearses complete backup sets in temporary profiles, checks represented-browser membership and restored counts, and reports only count-safe status or the failing stage.
 - Validates backup integrity and logs count-only operational data.
 - Generates backup-first Task Scheduler scripts and a standalone Windows executable.
 - Embeds and validates Windows product name, version, description, and original-filename metadata in release executables.
@@ -91,17 +92,16 @@ No open medium findings.
 - SignPath Foundation has not approved or configured the project. The repository must not add provider-specific signing integration or represent artifacts as SignPath-signed until onboarding details are supplied and reviewed.
 - The existing Azure Artifact Signing account, verified public-trust certificate profile, OIDC federated identity, signer role, environment values, and expected publisher subject are not configured. The workflow intentionally stops before publishing without them.
 - The repository has no version tags, GitHub Releases, downloads, stars, forks, or other project-specific adoption evidence. SignPath requires a project to be released in the form being signed and to have verifiable reputation, so application acceptance remains uncertain. Do not publish an unsigned executable solely to satisfy that condition.
-- Firefox snapshot verification and restore pass against a copied physical-macOS Places database without changing the live profile and pass physical Windows 11 validation. Verification is isolated and count-only; restore preserves the current database, excludes stale WAL and shared-memory sidecars, and fails safely for corrupt, mismatched, unsupported, or blocked inputs.
 
 ## Verification snapshot
 
-Verified on Windows 11 with Python 3.13.3 on 2026-08-08.
+Verified on Windows 11 with Python 3.13.3 on 2026-08-10.
 
 - `py -m pip install -e .`: passed.
 - `py -m browser_bookmark_sync --help`: passed.
 - `Run Browser Bookmark Tool.bat --help`: passed and reached the application through the Python module.
-- `python -m pytest -q`: passed with 142 cases, including Firefox recovery verification and restore, manifest and schema failures, process blocking, sidecar cleanup, rollback, Chrome and Edge recovery, preview policies, backup cataloging, automation, CLI, and GUI paths.
-- Python 3.11.9 isolated environment: the prior 80-case baseline, Ruff, compilation, and `pip check` passed. The 129-case suite is verified on Python 3.13.3 and awaits CI matrix verification.
+- `python -m pytest -q`: passed with 160 cases, including cross-platform complete-set recovery rehearsal, manifest, membership, schema, restore-stage and privacy failures, Firefox recovery, Chrome and Edge recovery, Safari validation, preview policies, backup cataloging, automation, CLI, and GUI paths.
+- Python 3.11 and Python 3.13: all 160 cases passed locally. Python 3.13 also passed Ruff, compilation, and `pip check`.
 - `py -m ruff check .`: passed with Ruff 0.16.2 and an explicit project rule set.
 - `py -m py_compile browser_bookmark_sync.py test_sync.py`: passed.
 - Package wheel build: passed. The wheel contains only the application module, project metadata, console entry point, and MIT license.
@@ -109,6 +109,7 @@ Verified on Windows 11 with Python 3.13.3 on 2026-08-08.
 - Hidden Tkinter construction: passed with duplicate removal and alphabetization disabled and the backup catalog filter set to `all` by default.
 - Live Windows `tasklist` detection: passed and identified the currently running `chrome.exe` and `msedge.exe` processes.
 - Live Firefox discovery, count-only schema read, consistent backup, and temporary-profile export staging: passed against one discovered profile without printing bookmark titles, URLs, or profile paths and without checkpointing or replacing live data.
+- Physical Windows recovery rehearsal: passed through source and the packaged executable against a disposable set copied from the detected Chrome, Edge, and Firefox profiles. It validated 291, 321, and 294 bookmarks respectively, preserved exact backup and live-profile file hashes, excluded private paths and URLs from output, created no backup-directory sidecars, and removed all temporary data.
 - `build.ps1`: produced `dist\BrowserBookmarkTool.exe` with PyInstaller 6.21.0.
 - `dist\BrowserBookmarkTool.exe --help`: passed as a standalone CLI smoke test.
 - `Invoke-BrowserBookmarkAutomation.ps1`: PowerShell syntax, readiness, and backup execution passed.

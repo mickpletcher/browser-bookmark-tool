@@ -111,18 +111,6 @@ Acceptance criteria:
 - Verification checks the signature, hardened runtime, notarization ticket, package contents, and SHA-256 checksum.
 - Installation and Gatekeeper verification instructions are documented without weakening the source-based workflow.
 
-### FUT-025: Cross-platform recovery rehearsal
-
-Add a no-live-write recovery drill that verifies a complete backup set and restores its Chrome, Edge, and optional Firefox members into isolated temporary profiles.
-
-Acceptance criteria:
-
-- The rehearsal validates the complete manifest and restores every represented browser into a temporary directory only.
-- Chromium schemas, Firefox SQLite integrity and roots, counts, and expected browser membership are checked after restoration.
-- The command never opens, checkpoints, replaces, or creates sidecars beside live browser profiles.
-- A count-only result reports success or the failing recovery stage without bookmark titles, URLs, or private paths.
-- Tests cover complete, incomplete, corrupt, mismatched, and mixed-browser backup sets on Windows and macOS.
-
 ### FUT-014: Notification delivery verification and provider templates
 
 Add a safe delivery test and reviewed local notifier examples for scheduled-run failure records.
@@ -134,6 +122,18 @@ Acceptance criteria:
 - Delivery timeouts, missing executables, and nonzero notifier exits produce a privacy-safe diagnostic without exposing command contents or credentials.
 - Testing notification delivery does not access browser profiles, create backups, change bookmarks, or alter failure suppression history.
 - Tests cover successful delivery, timeout, missing command, nonzero exit, and payload redaction.
+
+### FUT-026: Recovery-readiness history and freshness policy
+
+Add optional count-only rehearsal result files and local policy checks for backup age, expected browser membership, and consecutive recovery failures.
+
+Acceptance criteria:
+
+- A versioned atomic JSON result records the backup-set timestamp, manifest hash, represented browser names, counts, status, and failing stage without local paths or bookmark content.
+- A private policy can require specific browser members and a maximum backup or successful-rehearsal age.
+- Scheduled checks use backup files only and never open live browser profiles or modify backup sets.
+- History retention is bounded, and malformed, stale, missing-member, and repeated-failure states produce privacy-safe diagnostics.
+- Tests cover Windows and macOS result parity, atomic replacement, policy pass and failure, redaction, and no-live-access guarantees.
 
 ## Priority 3: Later
 

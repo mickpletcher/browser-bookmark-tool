@@ -2570,6 +2570,38 @@ class BackupComparison:
         return "\n".join(lines)
 
 
+class RecoveryRehearsalError(RuntimeError):
+    def __init__(self, stage: str, message: str) -> None:
+        self.stage = stage
+        super().__init__(f"Recovery rehearsal failed at {stage}: {message}")
+
+
+@dataclass(frozen=True)
+class RecoveryArtifactResult:
+    browser: str
+    bookmark_count: int
+    folder_count: int
+
+
+@dataclass(frozen=True)
+class RecoveryRehearsalResult:
+    stamp: str
+    artifacts: tuple[RecoveryArtifactResult, ...]
+
+    def render(self) -> str:
+        lines = [
+            "Recovery rehearsal passed.",
+            f"Backup set: {self.stamp}",
+            "Manifest: valid",
+        ]
+        lines.extend(
+            f"{artifact.browser}: {artifact.bookmark_count} bookmarks, {artifact.folder_count} folders"
+            for artifact in self.artifacts
+        )
+        lines.append("No live browser profiles or backup files were changed.")
+        return "\n".join(lines)
+
+
 def backup_member(path: Path) -> tuple[str, str] | None:
     match = BACKUP_NAME_PATTERN.fullmatch(path.name)
     if match is None:
@@ -2677,6 +2709,112 @@ def compare_backup_sets(catalog: BackupCatalog, older_stamp: str, newer_stamp: s
     if not older.complete or not older.valid or not newer.complete or not newer.valid:
         raise RuntimeError("Backup comparison requires two complete, valid sets.")
     return BackupComparison(older, newer)
+
+
+def recovery_backup_path(directory: Path, browser: str, stamp: str) -> Path:
+    extension = {
+        "Chrome": "json",
+        "Edge": "json",
+        "Firefox": "sqlite",
+        "Safari": "plist",
+    }[browser]
+    return directory / f"{browser}_{stamp}.{extension}"
+
+
+def rehearse_backup_set(directory: Path, stamp: str) -> RecoveryRehearsalResult:
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:_\d{6})?", stamp) is None:
+        raise RecoveryRehearsalError("selection", "the backup set timestamp is invalid.")
+    try:
+        catalog = catalog_backup_sets(directory)
+    except RuntimeError as exc:
+        raise RecoveryRehearsalError("catalog", "the backup directory could not be read.") from exc
+    selected = next((item for item in catalog.sets if item.stamp == stamp), None)
+    if selected is None:
+        raise RecoveryRehearsalError("selection", "the requested backup set was not found.")
+    if not selected.complete:
+        details = []
+        if selected.missing_members:
+            details.append(f"missing {', '.join(selected.missing_members)}")
+        if selected.extra_members:
+            details.append(f"unexpected {', '.join(selected.extra_members)}")
+        raise RecoveryRehearsalError("membership", "; ".join(details) or "the backup set is incomplete.")
+    if selected.manifest_status != "valid":
+        raise RecoveryRehearsalError("manifest", "the manifest or a referenced file is invalid.")
+    invalid = next((artifact.browser for artifact in selected.artifacts if not artifact.valid), None)
+    if invalid:
+        raise RecoveryRehearsalError(
+            f"{invalid.casefold()}_validation",
+            f"the {invalid} snapshot content is invalid.",
+        )
+
+    manifest = directory / f"Manifest_{stamp}.json"
+    try:
+        validate_backup_manifest(manifest)
+    except RuntimeError as exc:
+        raise RecoveryRehearsalError("manifest", "the manifest or a referenced file is invalid.") from exc
+
+    expected = {artifact.browser: artifact for artifact in selected.artifacts}
+    results: list[RecoveryArtifactResult] = []
+    with tempfile.TemporaryDirectory(prefix="browser-bookmark-recovery-rehearsal-") as temporary:
+        rehearsal_root = Path(temporary)
+        for browser in ("Chrome", "Edge", "Firefox", "Safari"):
+            summary = expected.get(browser)
+            if summary is None:
+                continue
+            backup = recovery_backup_path(directory, browser, stamp)
+            stage = f"{browser.casefold()}_restore"
+            try:
+                verified = verify_backup(backup, manifest)
+                if browser in ("Chrome", "Edge"):
+                    profile = rehearsal_root / browser / "Default"
+                    profile.mkdir(parents=True)
+                    shutil.copy2(backup, profile / "Bookmarks")
+                    restore_json_backup(
+                        backup,
+                        profile,
+                        browser,
+                        rehearsal_root / "preserved" / browser,
+                        force=True,
+                    )
+                    restored = read_bookmarks(profile)
+                    validate_chromium_bookmark_schema(restored)
+                    validate_unique_guids(restored)
+                elif browser == "Firefox":
+                    profile = rehearsal_root / browser
+                    profile.mkdir()
+                    shutil.copy2(backup, profile / "places.sqlite")
+                    restore_firefox_backup(
+                        backup,
+                        profile,
+                        rehearsal_root / "preserved" / browser,
+                        manifest_path=manifest,
+                        force=True,
+                    )
+                    restored = read_firefox_database(profile / "places.sqlite", immutable=True)
+                    if any(path.exists() for path in firefox_sidecars(profile / "places.sqlite")):
+                        raise RuntimeError("isolated Firefox sidecars remained after restore")
+                else:
+                    restored_path = rehearsal_root / browser / "Bookmarks.plist"
+                    restored_path.parent.mkdir()
+                    shutil.copy2(backup, restored_path)
+                    restored = read_safari_bookmarks(restored_path)
+
+                bookmark_count = count_bookmarks(restored)
+                folder_count = count_folders(restored)
+                if (
+                    bookmark_count != verified.bookmark_count
+                    or folder_count != verified.folder_count
+                    or bookmark_count != summary.bookmark_count
+                    or folder_count != summary.folder_count
+                ):
+                    raise RuntimeError("restored counts did not match the verified snapshot")
+            except (OSError, RuntimeError) as exc:
+                raise RecoveryRehearsalError(stage, f"the isolated {browser} restore did not validate.") from exc
+            results.append(RecoveryArtifactResult(browser, bookmark_count, folder_count))
+
+    if {artifact.browser for artifact in results} != set(expected):
+        raise RecoveryRehearsalError("membership", "restored browser membership did not match the manifest.")
+    return RecoveryRehearsalResult(stamp, tuple(results))
 
 
 def prepare_merged_data(
@@ -3883,7 +4021,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     operation_options.add_argument(
         "--verify-backup",
         type=Path,
-        help="Verify a raw JSON recovery snapshot without changing browser files",
+        help="Verify a Chromium JSON, Firefox SQLite, or Safari plist recovery snapshot",
     )
     operation_options.add_argument(
         "--catalog-backups",
@@ -3895,6 +4033,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         nargs=2,
         metavar=("OLDER_STAMP", "NEWER_STAMP"),
         help="Compare counts in two complete, valid backup sets",
+    )
+    operation_options.add_argument(
+        "--rehearse-recovery",
+        metavar="STAMP",
+        help="Restore a complete backup set into isolated temporary profiles",
     )
     operation_options.add_argument(
         "--compare-preview-reports",
@@ -4021,6 +4164,7 @@ def main(argv: list[str] | None = None) -> int:
             args.verify_manifest,
             args.catalog_backups,
             args.compare_backups,
+            args.rehearse_recovery,
             args.compare_preview_reports,
             args.catalog_filter != "all",
             args.preview_report,
@@ -4131,7 +4275,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(document, indent=2))
             return 1
 
-    catalog_operation = args.catalog_backups or args.compare_backups
+    catalog_operation = args.catalog_backups or args.compare_backups or args.rehearse_recovery
     if args.catalog_filter != "all" and not args.catalog_backups:
         print("Error: --catalog-filter requires --catalog-backups.", file=sys.stderr)
         return 1
@@ -4145,11 +4289,34 @@ def main(argv: list[str] | None = None) -> int:
         ):
             print("Error: backup catalog operations cannot be combined with restore, verification, or task generation.", file=sys.stderr)
             return 1
+        if args.rehearse_recovery and any(
+            (
+                args.chrome_profile,
+                args.edge_profile,
+                args.firefox_profile,
+                args.safari_bookmarks,
+                args.enable_safari,
+                args.enable_firefox,
+                args.firefox_export,
+                args.profile_map,
+                args.mapping,
+                args.force,
+                args.close_browsers,
+            )
+        ):
+            print(
+                "Error: recovery rehearsal cannot be combined with browser profiles or process-control options.",
+                file=sys.stderr,
+            )
+            return 1
         try:
-            catalog = catalog_backup_sets(args.backup_dir)
+            if args.rehearse_recovery:
+                report = rehearse_backup_set(args.backup_dir, args.rehearse_recovery).render()
+            else:
+                catalog = catalog_backup_sets(args.backup_dir)
             if args.compare_backups:
                 report = compare_backup_sets(catalog, *args.compare_backups).render()
-            else:
+            elif args.catalog_backups:
                 report = catalog.render(args.catalog_filter)
         except RuntimeError as exc:
             print(f"Error: {exc}", file=sys.stderr)

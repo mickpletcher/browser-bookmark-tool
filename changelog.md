@@ -8,6 +8,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
+- Added `FUT-025` cross-platform recovery rehearsal through `--rehearse-recovery`, with complete manifest and browser-membership validation plus isolated Chrome, Edge, optional Firefox, and Safari restoration.
+- Added count-only success and failure-stage reporting, strict rejection of live profile and process-control options, automatic temporary-profile cleanup, and complete, incomplete, corrupt, unsupported, mixed-browser, privacy, Windows, and macOS behavior coverage.
+- Added `FUT-026` recovery-readiness history and freshness policy as the replacement candidate for completed `FUT-025`.
+
 - Added an explicit Windows/macOS browser-support matrix and updated the repository social preview, support, contribution, bug-report, and pull-request guidance to reflect native macOS coverage and Safari's read-only safety boundary.
 
 - Added guided, user-controlled Safari HTML import preparation in the GUI and CLI without editing Safari or automating the final import.

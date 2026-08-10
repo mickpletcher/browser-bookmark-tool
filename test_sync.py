@@ -1969,6 +1969,7 @@ def catalog_files(
     chrome_urls: tuple[str, ...] = ("https://chrome.test",),
     edge_urls: tuple[str, ...] = ("https://edge.test",),
     firefox: Path | None = None,
+    safari: Path | None = None,
 ) -> dict[str, Path]:
     directory.mkdir(parents=True, exist_ok=True)
     files = {
@@ -1982,6 +1983,9 @@ def catalog_files(
     if firefox:
         files["Firefox"] = directory / f"Firefox_{stamp}.sqlite"
         shutil.copy2(firefox / "places.sqlite", files["Firefox"])
+    if safari:
+        files["Safari"] = directory / f"Safari_{stamp}.plist"
+        shutil.copy2(safari, files["Safari"])
     files["Manifest"] = sync_module.write_backup_manifest(
         directory / f"Manifest_{stamp}.json",
         [path for name, path in files.items() if name != "Manifest"],
@@ -2085,6 +2089,133 @@ def test_cli_backup_catalog_filters_and_compares(tmp_path: Path, capsys: pytest.
 
     assert main(["--catalog-filter", "valid"]) == 1
     assert "--catalog-filter requires --catalog-backups" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("macos", [False, True])
+def test_recovery_rehearsal_restores_mixed_set_without_live_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    macos: bool,
+):
+    stamp = "2026-08-10_12-00-00_000001"
+    firefox = firefox_profile(tmp_path / "firefox-source", "https://firefox.test")
+    safari = write_safari_plist(tmp_path / "safari-source" / "Bookmarks.plist")
+    catalog_files(tmp_path / "backups", stamp, firefox=firefox, safari=safari)
+    backups = tmp_path / "backups"
+    before = {path.name: path.read_bytes() for path in backups.iterdir() if path.is_file()}
+    monkeypatch.setattr(sync_module, "is_macos", lambda: macos)
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("recovery rehearsal accessed live browser state")
+
+    monkeypatch.setattr(sync_module, "discover_profiles", unexpected)
+    monkeypatch.setattr(sync_module, "discover_firefox_profiles", unexpected)
+    monkeypatch.setattr(sync_module, "discover_safari_bookmarks", unexpected)
+    monkeypatch.setattr(sync_module, "running_browser_processes", unexpected)
+    monkeypatch.setattr(sync_module, "running_firefox_processes", unexpected)
+
+    result = sync_module.rehearse_backup_set(backups, stamp)
+
+    assert [(item.browser, item.bookmark_count) for item in result.artifacts] == [
+        ("Chrome", 1),
+        ("Edge", 1),
+        ("Firefox", 1),
+        ("Safari", 1),
+    ]
+    rendered = result.render()
+    assert "Recovery rehearsal passed" in rendered
+    assert "Manifest: valid" in rendered
+    assert "https://" not in rendered
+    assert str(tmp_path) not in rendered
+    assert before == {path.name: path.read_bytes() for path in backups.iterdir() if path.is_file()}
+    assert not list(backups.glob("*.sqlite-wal"))
+    assert not list(backups.glob("*.sqlite-shm"))
+
+
+def test_recovery_rehearsal_reports_incomplete_and_corrupt_stages(tmp_path: Path):
+    incomplete_stamp = "2026-08-10_12-00-00_000001"
+    incomplete = catalog_files(tmp_path, incomplete_stamp)
+    incomplete["Edge"].unlink()
+
+    with pytest.raises(sync_module.RecoveryRehearsalError, match="failed at membership") as error:
+        sync_module.rehearse_backup_set(tmp_path, incomplete_stamp)
+    assert error.value.stage == "membership"
+    assert str(tmp_path) not in str(error.value)
+
+    corrupt_stamp = "2026-08-10_13-00-00_000001"
+    corrupt = catalog_files(tmp_path, corrupt_stamp)
+    corrupt["Chrome"].write_text("corrupt")
+
+    with pytest.raises(sync_module.RecoveryRehearsalError, match="failed at manifest") as error:
+        sync_module.rehearse_backup_set(tmp_path, corrupt_stamp)
+    assert error.value.stage == "manifest"
+    assert str(tmp_path) not in str(error.value)
+
+
+def test_recovery_rehearsal_reports_invalid_firefox_content_stage(tmp_path: Path):
+    stamp = "2026-08-10_12-00-00_000001"
+    firefox = firefox_profile(tmp_path / "firefox-source", "https://firefox.test")
+    files = catalog_files(tmp_path / "backups", stamp, firefox=firefox)
+    connection = sqlite3.connect(files["Firefox"])
+    connection.execute("DROP TABLE moz_keywords")
+    connection.commit()
+    connection.close()
+    sync_module.write_backup_manifest(
+        files["Manifest"],
+        [path for name, path in files.items() if name != "Manifest"],
+    )
+
+    with pytest.raises(sync_module.RecoveryRehearsalError, match="failed at firefox_validation") as error:
+        sync_module.rehearse_backup_set(tmp_path / "backups", stamp)
+    assert error.value.stage == "firefox_validation"
+    assert str(tmp_path) not in str(error.value)
+
+
+def test_recovery_rehearsal_cli_is_count_only_and_rejects_live_options(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    stamp = "2026-08-10_12-00-00_000001"
+    catalog_files(tmp_path, stamp)
+
+    assert main(["--rehearse-recovery", stamp, "--backup-dir", str(tmp_path)]) == 0
+    output = capsys.readouterr().out
+    assert "Recovery rehearsal passed" in output
+    assert "Chrome: 1 bookmarks" in output
+    assert "https://" not in output
+    assert str(tmp_path) not in output
+
+    assert main(
+        [
+            "--rehearse-recovery",
+            stamp,
+            "--backup-dir",
+            str(tmp_path),
+            "--chrome-profile",
+            str(tmp_path / "private-profile"),
+        ]
+    ) == 1
+    error = capsys.readouterr().err
+    assert "cannot be combined with browser profiles" in error
+    assert str(tmp_path) not in error
+
+
+def test_recovery_rehearsal_reports_restore_stage_without_private_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    stamp = "2026-08-10_12-00-00_000001"
+    catalog_files(tmp_path, stamp)
+
+    def fail_restore(*_args, **_kwargs):
+        raise RuntimeError(f"private failure in {tmp_path}")
+
+    monkeypatch.setattr(sync_module, "restore_json_backup", fail_restore)
+
+    with pytest.raises(sync_module.RecoveryRehearsalError, match="failed at chrome_restore") as error:
+        sync_module.rehearse_backup_set(tmp_path, stamp)
+    assert error.value.stage == "chrome_restore"
+    assert str(tmp_path) not in str(error.value)
 
 
 def test_gui_backup_catalog_uses_selected_filter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
