@@ -62,8 +62,9 @@ Safari is not a synchronization write target. The tool does not modify `Bookmark
 - Provides five merge strategies and a no-write dry-run report.
 - Writes optional atomic JSON or CSV dry-run reports with settings, counts, and change categories while excluding bookmark details by default.
 - Compares JSON and CSV preview reports by mapping without reopening browser profiles, can enforce direct thresholds or reusable private count-only policy profiles, and can atomically write machine-readable policy results.
-- Verifies Chromium JSON and Firefox SQLite recovery snapshots in isolated temporary profiles without changing live browser files.
+- Verifies Chromium JSON, Firefox SQLite, and Safari plist recovery snapshots in isolated temporary locations without changing live browser files.
 - Restores Chrome, Edge, or Firefox independently from verified raw recovery snapshots after preserving the current file or database.
+- Rehearses a complete backup set by restoring every represented browser into isolated temporary profiles without opening live profiles.
 - Saves and loads private named profile mappings and processes several mappings from the CLI.
 - Creates and validates SHA-256 backup manifests.
 - Catalogs generated backup sets by timestamp, flags missing or extra members, filters by completeness or validity, and compares count-only changes between verified sets without changing files.
@@ -482,7 +483,7 @@ py .\browser_bookmark_sync.py `
   --backup-dir "D:\Browser Bookmark Backups"
 ```
 
-The `all`, `complete`, `incomplete`, `valid`, and `invalid` filters are available in both the GUI and CLI. Completeness reports missing or extra generated set members. Validity covers manifest integrity and readable Chrome, Edge, or Firefox recovery content. Each complete, valid set shows bookmark and folder changes from the previous complete, valid set. Bookmark names and URLs are never displayed.
+The `all`, `complete`, `incomplete`, `valid`, and `invalid` filters are available in both the GUI and CLI. Completeness reports missing or extra generated set members. Validity covers manifest integrity and readable Chrome, Edge, Firefox, or Safari recovery content. Each complete, valid set shows bookmark and folder changes from the previous complete, valid set. Bookmark names and URLs are never displayed.
 
 Compare two complete, valid sets directly by generated timestamp:
 
@@ -493,6 +494,18 @@ py .\browser_bookmark_sync.py `
 ```
 
 Catalog and comparison operations read only the selected backup directory. Firefox SQLite inspection uses immutable mode so it does not create WAL or shared-memory sidecars. These operations do not open live browser profiles or create, rename, replace, prune, or delete backup files.
+
+### Rehearse recovery of a complete backup set
+
+Restore every represented browser into isolated temporary profiles and validate the restored counts:
+
+```powershell
+py .\browser_bookmark_sync.py `
+  --rehearse-recovery 2026-08-10_12-00-00_000001 `
+  --backup-dir "D:\Browser Bookmark Backups"
+```
+
+The rehearsal requires a complete, valid set containing Chrome, Edge, Bookmarks HTML, and its manifest. Firefox and Safari are included when represented in the manifest. Chromium structure and GUIDs, Firefox SQLite integrity, Places schema and roots, Safari plist structure, expected membership, hashes, sizes, bookmark counts, and folder counts are checked after isolated restoration. Output contains only the generated set timestamp, browser names, counts, status, and failing stage. Browser profiles, process-control options, bookmark details, URLs, and private paths are rejected or excluded. Temporary profiles are removed automatically, and backup files are never changed.
 
 ### Restore a recovery snapshot
 
@@ -621,6 +634,7 @@ Backups and the HTML export are created before process termination. The command 
 | `--catalog-backups` | Backup catalog | Groups generated backup files by timestamp and reports count-only status and changes. |
 | `--catalog-filter` | No | Filters the catalog by `all`, `complete`, `incomplete`, `valid`, or `invalid`. |
 | `--compare-backups` | Backup comparison | Two generated timestamps identifying complete, valid sets to compare. |
+| `--rehearse-recovery` | Recovery rehearsal | Generated timestamp identifying one complete set to restore and validate in isolated temporary profiles. |
 | `--chrome-profile` | CLI operations | Path to a Chrome profile containing `Bookmarks`. |
 | `--edge-profile` | CLI operations | Path to an Edge profile containing `Bookmarks`. |
 | `--firefox-profile` | No | Explicit Firefox profile containing `places.sqlite`; enables Firefox for a direct run. |
@@ -638,7 +652,7 @@ Backups and the HTML export are created before process termination. The command 
 | `--merge-strategy` | No | Selects `chrome-wins`, `edge-wins`, `preserve-both`, `merge-folders`, or `dated-folder`. |
 | `--force` | No | Bypasses browser process detection during synchronization. It has no effect on export-only runs. |
 | `--close-browsers` | No | Force-terminates detected write-target browser process trees, verifies closure, then synchronizes. Cannot be combined with `--force`. |
-| `--restore-backup` | Restore | Raw JSON recovery snapshot to restore. |
+| `--restore-backup` | Restore | Raw Chromium JSON or Firefox SQLite recovery snapshot to restore. |
 | `--restore-browser` | Restore | Target browser: `Chrome`, `Edge`, or `Firefox`. |
 | `--log-file` | No | Overrides the private count-only log path. |
 | `--verbose` | No | Prints and logs additional count-only details. |
@@ -765,7 +779,7 @@ The repository Actions allowlist still requires full commit SHA pinning. It perm
 
 The project is applying for SignPath Foundation service as a no-cost alternative. Do not add SignPath credentials, actions, or signing steps until the application is approved and SignPath supplies the project configuration. If accepted, replace the Azure-specific signing step in a reviewed pull request while preserving tag validation, manual signing approval, version-metadata enforcement, signature and timestamp checks, checksums, SBOM generation, provenance, and fail-closed publication. Update the repository Actions allowlist only for exact reviewed and full-SHA-pinned dependencies required by that integration.
 
-The current test suite contains 154 passing cases covering read-only Safari discovery, parsing, backup, merge/export, guided import preparation, privacy, GUI/CLI behavior, cross-browser matching, Firefox Places import/export/recovery, backup ordering and manifests, rollback, five merge strategies, preview policies, scheduling, automation, and existing-platform regressions.
+The current test suite contains 160 passing cases covering cross-platform isolated recovery rehearsal, complete and failed backup sets, read-only Safari discovery, parsing, backup, merge/export, guided import preparation, privacy, GUI/CLI behavior, cross-browser matching, Firefox Places import/export/recovery, backup ordering and manifests, rollback, five merge strategies, preview policies, scheduling, automation, and existing-platform regressions.
 
 ## Contributing and support
 

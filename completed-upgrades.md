@@ -143,3 +143,10 @@ The following capabilities were already complete when the upgrade tracking files
 - Release: Unreleased
 - Summary: Delivers the completed read-only portion of still-open `FUT-011`: macOS discovery, validated plist copies, manifest integrity, bookmark-only parsing, preview and merge planning, duplicate handling, organization, portable HTML export, and GUI/CLI support. It contains no Safari write path.
 - Verification: The 154-case suite covers discovery, binary plist parsing, nested folders, Reading List exclusion, malformed and unsupported data, duplicates, backup integrity, HTML export, guided import preparation, privacy, unsupported platforms, GUI/CLI behavior, and existing-browser regressions. A physical Mac read and validated an isolated backup containing 285 bookmarks and 61 folders, verified its manifest, and confirmed the live plist hash was unchanged.
+
+### FUT-025: Cross-platform recovery rehearsal
+
+- Completed: 2026-08-10
+- Release: Unreleased
+- Summary: Adds `--rehearse-recovery` for complete backup sets. The command validates manifest integrity and represented-browser membership, restores Chrome, Edge, optional Firefox, and Safari artifacts only under an automatically removed temporary directory, verifies restored schemas and counts, rejects live profile and process-control options, and emits count-only status or the failing stage.
+- Verification: The 160-case suite passes on Python 3.11 and 3.13 and covers Windows and macOS behavior, mixed-browser restoration, complete and incomplete membership, corrupt manifests, unsupported Firefox schemas, isolated restore failures, privacy-safe CLI output, exact backup-directory preservation, no live discovery or process access, Firefox sidecar isolation, Ruff, and Python compilation. Physical Windows source and packaged-executable rehearsals passed against a disposable Chrome, Edge, and Firefox set with 291, 321, and 294 bookmarks; backup and live-profile hashes were unchanged and temporary data was removed.
