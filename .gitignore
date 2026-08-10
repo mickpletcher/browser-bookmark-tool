@@ -31,6 +31,7 @@ browser-bookmark-preview*.json
 browser-bookmark-preview*.csv
 preview-policy*.json
 !preview-policy.example.json
+preview-result*.json
 register-bookmark-task*.ps1
 
 # C extensions
