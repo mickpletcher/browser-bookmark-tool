@@ -87,3 +87,10 @@ The following capabilities were already complete when the upgrade tracking files
 - Release: Unreleased
 - Summary: Adds GUI and CLI verification that copies a selected JSON recovery snapshot into an isolated temporary Chromium profile, validates required roots and bookmark-node structure, rejects malformed or duplicate GUIDs, verifies the matching SHA-256 manifest, and returns a count-only no-write report.
 - Verification: The 88-case suite covers valid snapshots, corrupt JSON, invalid Chromium structure, duplicate GUIDs, automatic and explicit manifest mismatches, live-profile preservation, and concise GUI and CLI reports. Ruff and Python compilation pass.
+
+### FUT-017: Backup-set catalog and comparison
+
+- Completed: 2026-08-09
+- Release: Unreleased
+- Summary: Adds read-only GUI and CLI inventory that groups generated backups by timestamp, separates completeness from validity, filters complete, incomplete, valid, and invalid sets, reports count-only Chrome, Edge, and Firefox content, calculates changes from the previous complete and valid set, and directly compares two verified sets.
+- Verification: The 100-case suite covers complete sets, missing and extra members, manifest mismatches, unrelated files and directories, CLI filters and comparison, GUI output, count privacy, and exact before-and-after backup-directory equality. Firefox catalog reads use SQLite immutable mode and create no WAL or shared-memory sidecars. Ruff and Python compilation pass.

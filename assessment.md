@@ -1,20 +1,20 @@
 # Browser Bookmark Tool Assessment
 
-Last reviewed: 2026-08-08
+Last reviewed: 2026-08-09
 Project version: 0.3.0
 Release readiness: Source ready; trusted signing credential required for binary release
 
 ## Summary
 
-The project is a Windows application for previewing, backing up, exporting, verifying, restoring, and organizing Chrome bookmarks and Microsoft Edge favorites, with disabled-by-default Firefox import and export. Version 0.3.0 combines transactional write and browser-process protections with isolated backup verification, a vendor-neutral local execution contract, capped privacy-safe health history, optional rate-limited failure notifications, and fail-closed signed release automation. SignPath Foundation application readiness includes a public code-signing policy, privacy policy, explicit solo-maintainer roles, manual approval requirements, and enforced Windows release metadata. A trusted provider and verified signing integration are still required before the first binary release can be published.
+The project is a Windows application for previewing, backing up, exporting, cataloging, comparing, verifying, restoring, and organizing Chrome bookmarks and Microsoft Edge favorites, with disabled-by-default Firefox import and export. Version 0.3.0 combines transactional write and browser-process protections with read-only backup-set inventory, isolated backup verification, a vendor-neutral local execution contract, capped privacy-safe health history, optional rate-limited failure notifications, and fail-closed signed release automation. SignPath Foundation application readiness includes a public code-signing policy, privacy policy, explicit solo-maintainer roles, manual approval requirements, and enforced Windows release metadata. A trusted provider and verified signing integration are still required before the first binary release can be published.
 
 ## Current status
 
 | Area | Status | Notes |
 | --- | --- | --- |
 | Packaging | Ready | Editable installation, module execution, and the batch launcher command path pass verification. |
-| Automated tests | Passing | All 94 test cases pass on Python 3.13.3 across Firefox discovery, Places import and export, cross-browser matching, backup ordering, manifests, disabled-mode isolation, three-browser rollback, merge, preview, mapping, backup verification, restore, integrity, logging, scheduling, automation, transaction, process, CLI, and GUI paths. |
-| Backup safety | Ready | Every run creates HTML and Chromium JSON backups plus a validated SHA-256 manifest. Enabled Firefox runs add a consistent SQLite backup before checkpoint or replacement. GUI and CLI verification currently cover Chromium JSON snapshots. |
+| Automated tests | Passing | All 100 test cases pass on Python 3.13.3 across Firefox discovery, Places import and export, cross-browser matching, backup ordering, manifests, disabled-mode isolation, three-browser rollback, merge, preview, mapping, backup catalog and comparison, backup verification, restore, integrity, logging, scheduling, automation, transaction, process, CLI, and GUI paths. |
+| Backup safety | Ready | Every run creates HTML and Chromium JSON backups plus a validated SHA-256 manifest. Enabled Firefox runs add a consistent SQLite backup before checkpoint or replacement. GUI and CLI cataloging groups and compares generated sets without changing them, while verification currently covers Chromium JSON snapshots. |
 | Synchronization safety | Ready | Chrome and Edge replacements are prepared and validated before writes. Firefox export stages and validates SQLite from its backup. Edge failure restores Chrome, and Firefox replacement failure restores both Chromium files. |
 | Bookmark organization | Ready | Duplicate removal and recursive folder-first alphabetization are independently optional in the GUI and CLI. |
 | URL matching | Ready | Conservative matching changes only scheme and host case. Aggressive whole-URL matching and trailing-slash collapse require explicit opt-in. |
@@ -28,7 +28,7 @@ The project is a Windows application for previewing, backing up, exporting, veri
 | Browser process handling | Ready | Running Chrome or Edge blocks synchronization after backups and export. Firefox is checked only when it is an enabled write target. CLI users can explicitly force-close selected process trees with `--close-browsers` or bypass detection with `--force`. |
 | Repository security | Ready | Secret scanning, push protection, Dependabot, private vulnerability reporting, CodeQL, restricted SHA-pinned Actions, and a solo-maintainer `main` ruleset are enabled. Optional non-provider patterns and validity checks are unavailable. |
 | Documentation | Ready | The README includes the repository social preview and documents current behavior, safety requirements, GUI and CLI use, installation and removal, backup restoration, limitations, download status, privacy, code-signing roles, development checks, contribution rules, support scope, and security reporting. |
-| Upgrade tracking | Good | Completed `FUT-006` is recorded with a replacement Firefox recovery-verification candidate. Three priority tiers still track SignPath integration, release provenance, macOS Chrome and Edge compatibility, and phased Safari support. |
+| Upgrade tracking | Good | Completed `FUT-017` is recorded with replacement candidate `FUT-019` for read-only duplicate backup-set detection. Three priority tiers still track SignPath integration, release provenance, recovery, reporting, macOS Chrome and Edge compatibility, and phased Safari support. |
 
 ## Strengths
 
@@ -50,6 +50,8 @@ The project is a Windows application for previewing, backing up, exporting, veri
 - Reports planned additions, duplicates, folder changes, and final counts without writing files.
 - Supports independent restore and private named multi-profile workflows.
 - Verifies recovery snapshots in isolated temporary profiles and reports only bookmark counts, folder counts, manifest name, and no-write status.
+- Catalogs generated backup sets without opening live profiles, distinguishes completeness from validity, flags missing or extra members, and reports only browser types and counts.
+- Compares only complete, valid sets and uses SQLite immutable mode so Firefox inventory cannot create recovery-directory sidecars.
 - Validates backup integrity and logs count-only operational data.
 - Generates backup-first Task Scheduler scripts and a standalone Windows executable.
 - Embeds and validates Windows product name, version, description, and original-filename metadata in release executables.
@@ -90,13 +92,13 @@ Verified on Windows 11 with Python 3.13.3 on 2026-08-08.
 - `py -m pip install -e .`: passed.
 - `py -m browser_bookmark_sync --help`: passed.
 - `Run Browser Bookmark Tool.bat --help`: passed and reached the application through the Python module.
-- `py -m pytest -q`: passed with 94 cases, including explicit Firefox discovery, Places import and export, conservative and aggressive cross-browser matching, backup-before-write ordering, Firefox manifest validation, process blocking, disabled-mode isolation, three-browser rollback, Chromium snapshot verification, automation, CLI, and GUI paths.
-- Python 3.11.9 isolated environment: the prior 80-case baseline, Ruff, compilation, and `pip check` passed. The 94-case suite is verified on Python 3.13.3 and awaits CI matrix verification.
+- `py -m pytest -q`: passed with 100 cases, including explicit Firefox discovery, Places import and export, conservative and aggressive cross-browser matching, backup-before-write ordering, Firefox manifest validation, process blocking, disabled-mode isolation, three-browser rollback, read-only backup catalog and comparison, Chromium snapshot verification, automation, CLI, and GUI paths.
+- Python 3.11.9 isolated environment: the prior 80-case baseline, Ruff, compilation, and `pip check` passed. The 100-case suite is verified on Python 3.13.3 and awaits CI matrix verification.
 - `py -m ruff check .`: passed with Ruff 0.16.2 and an explicit project rule set.
 - `py -m py_compile browser_bookmark_sync.py test_sync.py`: passed.
 - Package wheel build: passed. The wheel contains only the application module, project metadata, console entry point, and MIT license.
 - Standalone PyInstaller build: passed. The generated `BrowserBookmarkTool.exe --help` smoke test passed.
-- Hidden Tkinter construction: passed with duplicate removal and alphabetization disabled by default.
+- Hidden Tkinter construction: passed with duplicate removal and alphabetization disabled and the backup catalog filter set to `all` by default.
 - Live Windows `tasklist` detection: passed and identified the currently running `chrome.exe` and `msedge.exe` processes.
 - Live Firefox discovery, count-only schema read, consistent backup, and temporary-profile export staging: passed against one discovered profile without printing bookmark titles, URLs, or profile paths and without checkpointing or replacing live data.
 - `build.ps1`: produced `dist\BrowserBookmarkTool.exe` with PyInstaller 6.21.0.
@@ -120,7 +122,7 @@ Actions have read-only default workflow permissions, cannot approve pull request
 - The repository has one active ruleset and a `release` environment restricted to `v*` tags. It has no tags, releases, packages, deployments, webhooks, deploy keys, Azure signing secrets or variables, or collaborators other than the owner.
 - Repository and full-history scans found no provider credential patterns. GitHub secret scanning also reports zero open alerts.
 
-The documentation was reviewed against the current implementation and live GitHub configuration, including optional Firefox import and export, isolated backup verification, local AI scheduling, private configuration, structured results, health history, optional notification delivery, concurrency, repository security, Windows CI status, release metadata, SignPath application readiness, privacy, community health files, and upgrade tracking on 2026-08-08.
+The documentation was reviewed against the current implementation and the 2026-08-08 live GitHub configuration snapshot, including optional Firefox import and export, read-only backup catalog and comparison, isolated backup verification, local AI scheduling, private configuration, structured results, health history, optional notification delivery, concurrency, repository security, Windows CI status, release metadata, SignPath application readiness, privacy, community health files, and upgrade tracking on 2026-08-09.
 
 ## Maintenance requirement
 

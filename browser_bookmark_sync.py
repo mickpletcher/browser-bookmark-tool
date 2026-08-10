@@ -35,6 +35,7 @@ SUPPORTED_BROWSER_PROCESS_NAMES = (*BROWSER_PROCESS_NAMES, FIREFOX_PROCESS_NAME)
 MAX_BACKUPS = 50
 DUPLICATE_MODES = ("conservative", "aggressive")
 MERGE_STRATEGIES = ("chrome-wins", "edge-wins", "preserve-both", "merge-folders", "dated-folder")
+BACKUP_CATALOG_FILTERS = ("all", "complete", "incomplete", "valid", "invalid")
 AUTOMATION_SCHEMA_VERSION = 1
 AUTOMATION_OPERATIONS = ("backup", "sync", "dry-run")
 AUTOMATION_BROWSER_BEHAVIORS = ("block", "close")
@@ -789,9 +790,10 @@ def validate_firefox_schema(connection: sqlite3.Connection) -> None:
         raise RuntimeError("The Firefox places.sqlite file is missing required bookmark roots.")
 
 
-def read_firefox_database(path: Path) -> dict[str, Any]:
+def read_firefox_database(path: Path, immutable: bool = False) -> dict[str, Any]:
     try:
-        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+        immutable_option = "&immutable=1" if immutable else ""
+        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro{immutable_option}", uri=True)
     except sqlite3.Error as exc:
         raise RuntimeError(f"Could not open Firefox bookmark database {path}.") from exc
     try:
@@ -1514,6 +1516,232 @@ def count_folders(data: dict[str, Any]) -> int:
         for node in walk_nodes(root)
         if node.get("type") == "folder"
     )
+
+
+@dataclass(frozen=True)
+class BackupArtifactSummary:
+    browser: str
+    bookmark_count: int | None
+    folder_count: int | None
+    valid: bool
+
+
+@dataclass(frozen=True)
+class BackupSetSummary:
+    stamp: str
+    manifest_status: str
+    missing_members: tuple[str, ...]
+    extra_members: tuple[str, ...]
+    artifacts: tuple[BackupArtifactSummary, ...]
+
+    @property
+    def complete(self) -> bool:
+        return not self.missing_members and not self.extra_members
+
+    @property
+    def valid(self) -> bool:
+        return self.complete and self.manifest_status == "valid" and all(
+            artifact.valid for artifact in self.artifacts
+        )
+
+
+@dataclass(frozen=True)
+class BackupCatalog:
+    sets: tuple[BackupSetSummary, ...]
+
+    def filtered(self, status: str = "all") -> tuple[BackupSetSummary, ...]:
+        if status not in BACKUP_CATALOG_FILTERS:
+            raise RuntimeError(f"Unknown backup catalog filter: {status}")
+        if status == "all":
+            return self.sets
+        if status == "complete":
+            return tuple(item for item in self.sets if item.complete)
+        if status == "incomplete":
+            return tuple(item for item in self.sets if not item.complete)
+        if status == "valid":
+            return tuple(item for item in self.sets if item.valid)
+        return tuple(item for item in self.sets if not item.valid)
+
+    def deltas(self) -> dict[tuple[str, str], tuple[int, int]]:
+        result: dict[tuple[str, str], tuple[int, int]] = {}
+        previous: dict[str, BackupArtifactSummary] = {}
+        for backup_set in reversed(self.sets):
+            if not backup_set.complete or not backup_set.valid:
+                continue
+            for artifact in backup_set.artifacts:
+                older = previous.get(artifact.browser)
+                if (
+                    older
+                    and older.bookmark_count is not None
+                    and older.folder_count is not None
+                    and artifact.bookmark_count is not None
+                    and artifact.folder_count is not None
+                ):
+                    result[(backup_set.stamp, artifact.browser)] = (
+                        artifact.bookmark_count - older.bookmark_count,
+                        artifact.folder_count - older.folder_count,
+                    )
+                previous[artifact.browser] = artifact
+        return result
+
+    def render(self, status: str = "all") -> str:
+        selected = self.filtered(status)
+        lines = [f"Backup catalog: {len(selected)} set(s), filter {status}."]
+        changes = self.deltas()
+        for backup_set in selected:
+            completeness = "complete" if backup_set.complete else "incomplete"
+            validity = "valid" if backup_set.valid else "invalid"
+            lines.append(
+                f"\n{backup_set.stamp}: {completeness}, {validity}, manifest {backup_set.manifest_status}"
+            )
+            if backup_set.missing_members:
+                lines.append(f"Missing: {', '.join(backup_set.missing_members)}")
+            if backup_set.extra_members:
+                lines.append(f"Extra: {', '.join(backup_set.extra_members)}")
+            for artifact in backup_set.artifacts:
+                if artifact.bookmark_count is None or artifact.folder_count is None:
+                    lines.append(f"{artifact.browser}: content invalid")
+                    continue
+                change = changes.get((backup_set.stamp, artifact.browser))
+                delta = ""
+                if change:
+                    delta = f", change {change[0]:+d} bookmarks, {change[1]:+d} folders"
+                lines.append(
+                    f"{artifact.browser}: {artifact.bookmark_count} bookmarks, "
+                    f"{artifact.folder_count} folders{delta}"
+                )
+        lines.append("\nNo live browser files or backup files were changed.")
+        return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class BackupComparison:
+    older: BackupSetSummary
+    newer: BackupSetSummary
+
+    def render(self) -> str:
+        older_artifacts = {artifact.browser: artifact for artifact in self.older.artifacts}
+        newer_artifacts = {artifact.browser: artifact for artifact in self.newer.artifacts}
+        lines = [f"Backup comparison: {self.older.stamp} to {self.newer.stamp}"]
+        for browser in sorted(older_artifacts.keys() | newer_artifacts.keys()):
+            old = older_artifacts.get(browser)
+            new = newer_artifacts.get(browser)
+            if old is None or new is None:
+                lines.append(f"{browser}: not present in both sets")
+                continue
+            lines.append(
+                f"{browser}: bookmarks {old.bookmark_count} to {new.bookmark_count} "
+                f"({new.bookmark_count - old.bookmark_count:+d}), folders "
+                f"{old.folder_count} to {new.folder_count} ({new.folder_count - old.folder_count:+d})"
+            )
+        lines.append("No live browser files or backup files were changed.")
+        return "\n".join(lines)
+
+
+def backup_member(path: Path) -> tuple[str, str] | None:
+    match = BACKUP_NAME_PATTERN.fullmatch(path.name)
+    if match is None:
+        return None
+    prefix = match.group("prefix")
+    extension = match.group("extension")
+    expected = {
+        "Chrome": "json",
+        "Edge": "json",
+        "Firefox": "sqlite",
+        "Bookmarks": "html",
+        "Manifest": "json",
+    }
+    if expected[prefix] != extension:
+        return None
+    return prefix, match.group("stamp")
+
+
+def catalog_manifest(path: Path, stamp: str) -> tuple[str, set[str]]:
+    if not path.is_file():
+        return "missing", set()
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "invalid", set()
+    if not isinstance(document, dict) or not isinstance(document.get("files"), list):
+        return "invalid", set()
+    referenced: set[str] = set()
+    structurally_valid = True
+    for entry in document["files"]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            structurally_valid = False
+            continue
+        parsed = backup_member(path.parent / entry["name"])
+        if parsed is None or parsed[1] != stamp or parsed[0] == "Manifest" or parsed[0] in referenced:
+            structurally_valid = False
+            continue
+        referenced.add(parsed[0])
+    if not {"Chrome", "Edge", "Bookmarks"}.issubset(referenced):
+        structurally_valid = False
+    try:
+        validate_backup_manifest(path)
+    except RuntimeError:
+        return "invalid", referenced
+    return ("valid" if structurally_valid else "invalid"), referenced
+
+
+def summarize_backup_artifact(browser: str, path: Path) -> BackupArtifactSummary:
+    try:
+        if browser == "Firefox":
+            data = read_firefox_database(path, immutable=True)
+        else:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            validate_chromium_bookmark_schema(data)
+            validate_unique_guids(data)
+        return BackupArtifactSummary(browser, count_bookmarks(data), count_folders(data), True)
+    except (OSError, json.JSONDecodeError, RuntimeError):
+        return BackupArtifactSummary(browser, None, None, False)
+
+
+def catalog_backup_sets(directory: Path) -> BackupCatalog:
+    if not directory.is_dir():
+        raise RuntimeError(f"Backup directory {directory} does not exist.")
+    grouped: dict[str, dict[str, Path]] = {}
+    try:
+        paths = tuple(directory.iterdir())
+    except OSError as exc:
+        raise RuntimeError(f"Could not read backup directory {directory}.") from exc
+    for path in paths:
+        if not path.is_file() or (parsed := backup_member(path)) is None:
+            continue
+        prefix, stamp = parsed
+        grouped.setdefault(stamp, {})[prefix] = path
+
+    summaries: list[BackupSetSummary] = []
+    required = {"Chrome", "Edge", "Bookmarks", "Manifest"}
+    for stamp, members in sorted(grouped.items(), reverse=True):
+        manifest = members.get("Manifest", directory / f"Manifest_{stamp}.json")
+        manifest_status, referenced = catalog_manifest(manifest, stamp)
+        expected = required | ({"Firefox"} if "Firefox" in referenced else set())
+        present = set(members)
+        missing = tuple(sorted(expected - present))
+        extra = tuple(sorted((present - {"Manifest"}) - referenced)) if manifest_status != "missing" else ()
+        artifacts = tuple(
+            summarize_backup_artifact(browser, members[browser])
+            for browser in ("Chrome", "Edge", "Firefox")
+            if browser in members
+        )
+        summaries.append(
+            BackupSetSummary(stamp, manifest_status, missing, extra, artifacts)
+        )
+    return BackupCatalog(tuple(summaries))
+
+
+def compare_backup_sets(catalog: BackupCatalog, older_stamp: str, newer_stamp: str) -> BackupComparison:
+    by_stamp = {item.stamp: item for item in catalog.sets}
+    missing = [stamp for stamp in (older_stamp, newer_stamp) if stamp not in by_stamp]
+    if missing:
+        raise RuntimeError(f"Unknown backup set timestamp(s): {', '.join(missing)}")
+    older = by_stamp[older_stamp]
+    newer = by_stamp[newer_stamp]
+    if not older.complete or not older.valid or not newer.complete or not newer.valid:
+        raise RuntimeError("Backup comparison requires two complete, valid sets.")
+    return BackupComparison(older, newer)
 
 
 def prepare_merged_data(
@@ -2291,7 +2519,7 @@ class App(ttk.Frame):
         super().__init__(master, padding=18)
         self.master = master
         master.title(APP_NAME)
-        master.minsize(820, 690)
+        master.minsize(900, 720)
         self.chrome = tk.StringVar()
         self.edge = tk.StringVar()
         self.firefox = tk.StringVar()
@@ -2303,6 +2531,7 @@ class App(ttk.Frame):
         self.alphabetize = tk.BooleanVar(value=False)
         self.duplicate_mode = tk.StringVar(value="conservative")
         self.merge_strategy = tk.StringVar(value="chrome-wins")
+        self.catalog_filter = tk.StringVar(value="all")
         self.status = tk.StringVar(value="Select a Chrome and Edge profile.")
         self._build()
         self._detect()
@@ -2356,8 +2585,20 @@ class App(ttk.Frame):
         ttk.Button(management, text="Restore Edge", command=lambda: self._restore("Edge")).pack(side="left")
         ttk.Button(management, text="Save Profile Mapping", command=self._save_mapping).pack(side="left")
         ttk.Button(management, text="Load Profile Mapping", command=self._load_mapping).pack(side="left", padx=8)
-        ttk.Separator(self).grid(row=13, column=0, columnspan=3, sticky="ew", pady=18)
-        ttk.Label(self, textvariable=self.status, wraplength=760).grid(row=14, column=0, columnspan=3, sticky="w")
+        catalog = ttk.Frame(self)
+        catalog.grid(row=13, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        ttk.Button(catalog, text="Catalog Backups", command=self._catalog_backups).pack(side="left")
+        ttk.Label(catalog, text="Filter").pack(side="left", padx=(12, 6))
+        ttk.Combobox(
+            catalog,
+            textvariable=self.catalog_filter,
+            values=BACKUP_CATALOG_FILTERS,
+            state="readonly",
+            width=12,
+        ).pack(side="left")
+        ttk.Label(catalog, text="Count changes use the previous complete, valid set.").pack(side="left", padx=12)
+        ttk.Separator(self).grid(row=14, column=0, columnspan=3, sticky="ew", pady=18)
+        ttk.Label(self, textvariable=self.status, wraplength=840).grid(row=15, column=0, columnspan=3, sticky="w")
         self.pack(fill="both", expand=True)
 
     def _profile_row(self, row: int, label: str, variable: tk.StringVar) -> ttk.Combobox:
@@ -2466,6 +2707,19 @@ class App(ttk.Frame):
         directory = Path(self.backups.get())
         directory.mkdir(parents=True, exist_ok=True)
         webbrowser.open(directory.as_uri())
+
+    def _catalog_backups(self) -> None:
+        try:
+            status = self.catalog_filter.get()
+            catalog = catalog_backup_sets(Path(self.backups.get()))
+            selected = catalog.filtered(status)
+            self.status.set(
+                f"Cataloged {len(selected)} backup set(s) with the {status} filter. "
+                "No files were changed."
+            )
+            messagebox.showinfo(f"{APP_NAME} Backup Catalog", catalog.render(status))
+        except Exception as exc:
+            messagebox.showerror(f"{APP_NAME} Backup Catalog", str(exc))
 
     def _verify_backup(self) -> None:
         selected = filedialog.askopenfilename(
@@ -2587,6 +2841,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=Path,
         help="Verify a raw JSON recovery snapshot without changing browser files",
     )
+    operation_options.add_argument(
+        "--catalog-backups",
+        action="store_true",
+        help="Inventory generated backup sets without changing files",
+    )
+    operation_options.add_argument(
+        "--compare-backups",
+        nargs=2,
+        metavar=("OLDER_STAMP", "NEWER_STAMP"),
+        help="Compare counts in two complete, valid backup sets",
+    )
     parser.add_argument("--chrome-profile", type=Path)
     parser.add_argument("--edge-profile", type=Path)
     parser.add_argument("--firefox-profile", type=Path, help="Explicit Firefox profile to import")
@@ -2616,6 +2881,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--restore-backup", type=Path, help="Raw JSON recovery snapshot to restore")
     parser.add_argument("--restore-browser", choices=("Chrome", "Edge"))
     parser.add_argument("--verify-manifest", type=Path, help="Manifest to use with --verify-backup")
+    parser.add_argument("--catalog-filter", choices=BACKUP_CATALOG_FILTERS, default="all")
     parser.add_argument("--log-file", type=Path, help="Privacy-safe operation log path")
     parser.add_argument("--verbose", action="store_true", help="Print and log additional count-only details")
     parser.add_argument("--write-task-script", type=Path, help="Write a PowerShell scheduled-task registration script")
@@ -2651,6 +2917,9 @@ def main(argv: list[str] | None = None) -> int:
             args.run_automation,
             args.verify_backup,
             args.verify_manifest,
+            args.catalog_backups,
+            args.compare_backups,
+            args.catalog_filter != "all",
         )
     )
     if args.gui or not has_cli_operation:
@@ -2690,6 +2959,26 @@ def main(argv: list[str] | None = None) -> int:
             }
             print(json.dumps(document, indent=2))
             return 1
+
+    catalog_operation = args.catalog_backups or args.compare_backups
+    if args.catalog_filter != "all" and not args.catalog_backups:
+        print("Error: --catalog-filter requires --catalog-backups.", file=sys.stderr)
+        return 1
+    if catalog_operation:
+        if args.restore_backup or args.restore_browser or args.write_task_script or args.verify_manifest:
+            print("Error: backup catalog operations cannot be combined with restore, verification, or task generation.", file=sys.stderr)
+            return 1
+        try:
+            catalog = catalog_backup_sets(args.backup_dir)
+            if args.compare_backups:
+                report = compare_backup_sets(catalog, *args.compare_backups).render()
+            else:
+                report = catalog.render(args.catalog_filter)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        print(report)
+        return 0
 
     if args.verify_manifest and not args.verify_backup:
         print("Error: --verify-manifest requires --verify-backup.", file=sys.stderr)
