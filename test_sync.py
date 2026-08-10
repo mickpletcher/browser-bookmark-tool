@@ -2340,7 +2340,7 @@ def test_launchd_plist_defaults_to_backup_only(tmp_path: Path, monkeypatch: pyte
     assert document["Label"] == "com.browser-bookmark-tool.bookmark-backup"
     assert document["StartCalendarInterval"] == {"Hour": 3, "Minute": 30}
     assert document["ProgramArguments"][:3] == [
-        "/usr/local/bin/python3",
+        str(Path("/usr/local/bin/python3").resolve()),
         "-m",
         "browser_bookmark_sync",
     ]
