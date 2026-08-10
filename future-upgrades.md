@@ -88,6 +88,8 @@ Acceptance criteria:
 
 Add isolated verification and explicit restore for the raw Firefox SQLite recovery snapshots created by completed `FUT-006`.
 
+Implementation status: GUI and CLI verification and restore, manifest and schema validation, process blocking, current-database preservation, sidecar cleanup, rollback, automated failure coverage, and physical macOS copied-profile validation are implemented. Completion awaits physical Windows 11 validation.
+
 Acceptance criteria:
 
 - Verification runs against a temporary database copy, validates SQLite integrity and required Places roots, and never opens a live Firefox profile.

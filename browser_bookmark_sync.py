@@ -695,26 +695,13 @@ class BackupVerification:
 
 def matching_backup_manifest(backup_path: Path) -> Path:
     match = BACKUP_NAME_PATTERN.fullmatch(backup_path.name)
-    if match is None or match.group("prefix") not in ("Chrome", "Edge"):
+    if match is None or match.group("prefix") not in ("Chrome", "Edge", "Firefox"):
         raise RuntimeError("Could not determine the matching manifest from the recovery snapshot name.")
     return backup_path.parent / f"Manifest_{match.group('stamp')}.json"
 
 
-def verify_json_backup(backup_path: Path, manifest_path: Path | None = None) -> BackupVerification:
-    if backup_path.suffix.casefold() != ".json":
-        raise RuntimeError("Backup verification requires a raw JSON recovery snapshot.")
-    if not backup_path.is_file():
-        raise RuntimeError(f"Recovery snapshot {backup_path} does not exist.")
+def validate_manifest_member(backup_path: Path, manifest_path: Path | None = None) -> Path:
     resolved_manifest = manifest_path or matching_backup_manifest(backup_path)
-
-    with tempfile.TemporaryDirectory(prefix="browser-bookmark-verify-") as temporary:
-        profile = Path(temporary) / "Default"
-        profile.mkdir()
-        shutil.copy2(backup_path, profile / "Bookmarks")
-        data = read_bookmarks(profile)
-        validate_chromium_bookmark_schema(data)
-        validate_unique_guids(data)
-
     validate_backup_manifest(resolved_manifest)
     manifest = json.loads(resolved_manifest.read_text(encoding="utf-8"))
     matching_entries = [entry for entry in manifest["files"] if entry["name"] == backup_path.name]
@@ -723,12 +710,63 @@ def verify_json_backup(backup_path: Path, manifest_path: Path | None = None) -> 
     entry = matching_entries[0]
     if backup_path.stat().st_size != entry["size"] or sha256_file(backup_path) != entry["sha256"]:
         raise RuntimeError(f"Backup integrity validation failed for {backup_path}.")
+    return resolved_manifest
+
+
+def verify_json_backup(backup_path: Path, manifest_path: Path | None = None) -> BackupVerification:
+    if backup_path.suffix.casefold() != ".json":
+        raise RuntimeError("Backup verification requires a raw JSON recovery snapshot.")
+    if not backup_path.is_file():
+        raise RuntimeError(f"Recovery snapshot {backup_path} does not exist.")
+    with tempfile.TemporaryDirectory(prefix="browser-bookmark-verify-") as temporary:
+        profile = Path(temporary) / "Default"
+        profile.mkdir()
+        shutil.copy2(backup_path, profile / "Bookmarks")
+        data = read_bookmarks(profile)
+        validate_chromium_bookmark_schema(data)
+        validate_unique_guids(data)
+
+    resolved_manifest = validate_manifest_member(backup_path, manifest_path)
     return BackupVerification(
         backup_path=backup_path,
         manifest_path=resolved_manifest,
         bookmark_count=count_bookmarks(data),
         folder_count=count_folders(data),
     )
+
+
+def verify_firefox_backup(backup_path: Path, manifest_path: Path | None = None) -> BackupVerification:
+    if backup_path.suffix.casefold() != ".sqlite":
+        raise RuntimeError("Firefox backup verification requires a raw SQLite recovery snapshot.")
+    if not backup_path.is_file():
+        raise RuntimeError(f"Recovery snapshot {backup_path} does not exist.")
+    with tempfile.TemporaryDirectory(prefix="browser-bookmark-firefox-verify-") as temporary:
+        isolated = Path(temporary) / "places.sqlite"
+        shutil.copy2(backup_path, isolated)
+        try:
+            connection = sqlite3.connect(isolated)
+            if connection.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+                raise RuntimeError("The Firefox recovery snapshot did not pass SQLite integrity validation.")
+            validate_firefox_schema(connection)
+        except sqlite3.Error as exc:
+            raise RuntimeError(f"Could not verify Firefox recovery snapshot {backup_path}.") from exc
+        finally:
+            if "connection" in locals():
+                connection.close()
+        data = read_firefox_database(isolated)
+    resolved_manifest = validate_manifest_member(backup_path, manifest_path)
+    return BackupVerification(
+        backup_path=backup_path,
+        manifest_path=resolved_manifest,
+        bookmark_count=count_bookmarks(data),
+        folder_count=count_folders(data),
+    )
+
+
+def verify_backup(backup_path: Path, manifest_path: Path | None = None) -> BackupVerification:
+    if backup_path.suffix.casefold() == ".sqlite":
+        return verify_firefox_backup(backup_path, manifest_path)
+    return verify_json_backup(backup_path, manifest_path)
 
 
 def write_privacy_safe_log(path: Path, event: str, **details: Any) -> None:
@@ -771,6 +809,57 @@ def restore_json_backup(
         os.replace(staged, current)
     finally:
         staged.unlink(missing_ok=True)
+    return preserved
+
+
+def firefox_sidecars(path: Path) -> tuple[Path, Path]:
+    return (path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm"))
+
+
+def restore_firefox_backup(
+    backup_path: Path,
+    profile: Path,
+    recovery_dir: Path,
+    manifest_path: Path | None = None,
+    force: bool = False,
+) -> Path:
+    verify_firefox_backup(backup_path, manifest_path)
+    process = firefox_process_name()
+    if not force and process in running_firefox_processes():
+        raise RuntimeError(f"Restore blocked because {process} is running.")
+    current = firefox_database(profile)
+    stamp = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    recovery_dir.mkdir(parents=True, exist_ok=True)
+    preserved = recovery_dir / f"Firefox_PreRestore_{stamp}.sqlite"
+    backup_firefox_database(profile, preserved)
+    staged = current.with_name(f"places.pending.{uuid.uuid4().hex}.sqlite")
+    rollback = current.with_name(f"places.rollback.{uuid.uuid4().hex}.sqlite")
+    replaced = False
+    try:
+        shutil.copy2(backup_path, staged)
+        read_firefox_database(staged)
+        shutil.copy2(preserved, rollback)
+        for sidecar in firefox_sidecars(current):
+            sidecar.unlink(missing_ok=True)
+        os.replace(staged, current)
+        replaced = True
+        read_firefox_database(current, immutable=True)
+    except Exception as exc:
+        if replaced and rollback.is_file():
+            try:
+                for sidecar in firefox_sidecars(current):
+                    sidecar.unlink(missing_ok=True)
+                os.replace(rollback, current)
+            except OSError as rollback_exc:
+                raise RuntimeError(
+                    f"Firefox restore failed and automatic rollback failed. Preserved database: {preserved}"
+                ) from rollback_exc
+        raise RuntimeError(f"Firefox restore failed. The previous database was preserved at {preserved}.") from exc
+    finally:
+        staged.unlink(missing_ok=True)
+        rollback.unlink(missing_ok=True)
+        for temporary in (*firefox_sidecars(staged), *firefox_sidecars(rollback)):
+            temporary.unlink(missing_ok=True)
     return preserved
 
 
@@ -3413,6 +3502,7 @@ class App(ttk.Frame):
         ttk.Button(management, text="Verify Backup", command=self._verify_backup).pack(side="left")
         ttk.Button(management, text="Restore Chrome", command=lambda: self._restore("Chrome")).pack(side="left", padx=8)
         ttk.Button(management, text="Restore Edge", command=lambda: self._restore("Edge")).pack(side="left")
+        ttk.Button(management, text="Restore Firefox", command=lambda: self._restore("Firefox")).pack(side="left", padx=8)
         ttk.Button(management, text="Save Profile Mapping", command=self._save_mapping).pack(side="left")
         ttk.Button(management, text="Load Profile Mapping", command=self._load_mapping).pack(side="left", padx=8)
         catalog = ttk.Frame(self)
@@ -3554,13 +3644,13 @@ class App(ttk.Frame):
     def _verify_backup(self) -> None:
         selected = filedialog.askopenfilename(
             initialdir=self.backups.get(),
-            title="Select JSON recovery snapshot to verify",
-            filetypes=[("JSON recovery snapshots", "*.json")],
+            title="Select recovery snapshot to verify",
+            filetypes=[("Recovery snapshots", "*.json *.sqlite")],
         )
         if not selected:
             return
         try:
-            report = verify_json_backup(Path(selected))
+            report = verify_backup(Path(selected))
             self.status.set(
                 f"Verified {report.bookmark_count} bookmarks and {report.folder_count} folders. "
                 "No live browser files were changed."
@@ -3570,25 +3660,41 @@ class App(ttk.Frame):
             messagebox.showerror(f"{APP_NAME} Verification", str(exc))
 
     def _restore(self, browser: str) -> None:
-        profile_value = self.chrome.get() if browser == "Chrome" else self.edge.get()
+        profile_value = {
+            "Chrome": self.chrome.get(),
+            "Edge": self.edge.get(),
+            "Firefox": self.firefox.get(),
+        }[browser]
         if not profile_value:
             messagebox.showerror(APP_NAME, f"A {browser} profile is required.")
             return
         selected = filedialog.askopenfilename(
             initialdir=self.backups.get(),
-            title=f"Select {browser} JSON recovery snapshot",
-            filetypes=[("JSON recovery snapshots", "*.json")],
+            title=f"Select {browser} recovery snapshot",
+            filetypes=(
+                [("SQLite recovery snapshots", "*.sqlite")]
+                if browser == "Firefox"
+                else [("JSON recovery snapshots", "*.json")]
+            ),
         )
         if not selected:
             return
         if not messagebox.askyesno(APP_NAME, f"Restore {browser} from {selected}?\n\nThe current file will be preserved first."):
             return
         try:
-            preserved = restore_json_backup(
-                Path(selected),
-                Path(profile_value),
-                browser,
-                Path(self.backups.get()),
+            preserved = (
+                restore_firefox_backup(
+                    Path(selected),
+                    Path(profile_value),
+                    Path(self.backups.get()),
+                )
+                if browser == "Firefox"
+                else restore_json_backup(
+                    Path(selected),
+                    Path(profile_value),
+                    browser,
+                    Path(self.backups.get()),
+                )
             )
             messagebox.showinfo(APP_NAME, f"{browser} was restored. Previous file: {preserved}")
         except Exception as exc:
@@ -3719,8 +3825,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--alphabetize", action="store_true", help="Sort folders and bookmarks alphabetically")
     parser.add_argument("--duplicate-mode", choices=DUPLICATE_MODES, default="conservative")
     parser.add_argument("--merge-strategy", choices=MERGE_STRATEGIES, default="chrome-wins")
-    parser.add_argument("--restore-backup", type=Path, help="Raw JSON recovery snapshot to restore")
-    parser.add_argument("--restore-browser", choices=("Chrome", "Edge"))
+    parser.add_argument("--restore-backup", type=Path, help="Raw JSON or Firefox SQLite recovery snapshot to restore")
+    parser.add_argument("--restore-browser", choices=("Chrome", "Edge", "Firefox"))
     parser.add_argument("--verify-manifest", type=Path, help="Manifest to use with --verify-backup")
     parser.add_argument("--catalog-filter", choices=BACKUP_CATALOG_FILTERS, default="all")
     parser.add_argument(
@@ -3946,11 +4052,28 @@ def main(argv: list[str] | None = None) -> int:
             print("Error: backup verification cannot be combined with restore or task-script operations.", file=sys.stderr)
             return 1
         try:
-            report = verify_json_backup(args.verify_backup, args.verify_manifest)
+            report = verify_backup(args.verify_backup, args.verify_manifest)
         except RuntimeError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
         print(report.render())
+        return 0
+
+    if args.restore_backup and args.restore_browser == "Firefox" and not args.profile_map:
+        if not args.firefox_profile:
+            print("Error: --firefox-profile is required to restore Firefox directly.", file=sys.stderr)
+            return 1
+        try:
+            preserved = restore_firefox_backup(
+                args.restore_backup,
+                args.firefox_profile,
+                args.backup_dir,
+                force=args.force,
+            )
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        print(f"Restored Firefox. Previous database: {preserved}")
         return 0
 
     try:
@@ -4000,14 +4123,30 @@ def main(argv: list[str] | None = None) -> int:
             print("Error: --restore-browser is required with --restore-backup.", file=sys.stderr)
             return 1
         mapping = mappings[0]
-        profile = mapping.chrome_profile if args.restore_browser == "Chrome" else mapping.edge_profile
+        profile = {
+            "Chrome": mapping.chrome_profile,
+            "Edge": mapping.edge_profile,
+            "Firefox": mapping.firefox_profile,
+        }[args.restore_browser]
+        if profile is None:
+            print("Error: The selected profile mapping has no Firefox profile.", file=sys.stderr)
+            return 1
         try:
-            preserved = restore_json_backup(
-                args.restore_backup,
-                profile,
-                args.restore_browser,
-                mapping.backup_dir,
-                force=args.force,
+            preserved = (
+                restore_firefox_backup(
+                    args.restore_backup,
+                    profile,
+                    mapping.backup_dir,
+                    force=args.force,
+                )
+                if args.restore_browser == "Firefox"
+                else restore_json_backup(
+                    args.restore_backup,
+                    profile,
+                    args.restore_browser,
+                    mapping.backup_dir,
+                    force=args.force,
+                )
             )
         except RuntimeError as exc:
             print(f"Error: {exc}", file=sys.stderr)

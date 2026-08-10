@@ -53,8 +53,8 @@ The GUI, CLI, transactional bookmark workflow, Chrome, Edge, and optional Firefo
 - Provides five merge strategies and a no-write dry-run report.
 - Writes optional atomic JSON or CSV dry-run reports with settings, counts, and change categories while excluding bookmark details by default.
 - Compares JSON and CSV preview reports by mapping without reopening browser profiles, can enforce direct thresholds or reusable private count-only policy profiles, and can atomically write machine-readable policy results.
-- Verifies JSON recovery snapshots in a temporary Chromium profile without changing live browser files.
-- Restores Chrome or Edge independently from raw JSON recovery snapshots.
+- Verifies Chromium JSON and Firefox SQLite recovery snapshots in isolated temporary profiles without changing live browser files.
+- Restores Chrome, Edge, or Firefox independently from verified raw recovery snapshots after preserving the current file or database.
 - Saves and loads private named profile mappings and processes several mappings from the CLI.
 - Creates and validates SHA-256 backup manifests.
 - Catalogs generated backup sets by timestamp, flags missing or extra members, filters by completeness or validity, and compares count-only changes between verified sets without changing files.
@@ -252,7 +252,7 @@ Every signing request must be manually approved after its source, tag, required 
    - **Back Up + Sync** creates backups and the HTML export, writes the merged bookmarks to Chrome and Edge, and writes missing URLs to Firefox only when **Write to Firefox** is selected.
     - **Open Backup Folder** opens the configured backup directory.
     - **Verify Backup** checks Chromium structure, GUID uniqueness, and the matching SHA-256 manifest without changing either browser.
-    - **Restore Chrome** or **Restore Edge** restores that browser independently from a selected raw JSON recovery snapshot after preserving its current file.
+   - **Restore Chrome**, **Restore Edge**, or **Restore Firefox** restores that browser independently from a selected raw recovery snapshot after preserving its current file or database.
    - **Save Profile Mapping** and **Load Profile Mapping** manage named browser-profile pairs in a private JSON file.
 
 The app automatically selects the first detected profile for each browser. Review both selections before running an action.
@@ -451,7 +451,7 @@ py .\browser_bookmark_sync.py `
 
 Repeat `--mapping` to run several named mappings. Omit `--mapping` to process every mapping in the file. Each mapping has its own Chrome profile, Edge profile, optional Firefox profile, and backup directory, which reduces the risk of mixing work and personal profiles.
 
-### Verify a JSON recovery snapshot
+### Verify a recovery snapshot
 
 Verify a generated snapshot before attempting a restore:
 
@@ -460,7 +460,7 @@ py .\browser_bookmark_sync.py `
   --verify-backup "D:\Browser Bookmark Backups\Chrome_2026-08-08_12-00-00_000001.json"
 ```
 
-The tool copies the snapshot into an isolated temporary Chromium profile, validates its root and node structure, rejects malformed or duplicate GUIDs, and verifies every file in the matching `Manifest_*` file. It reports bookmark and folder counts, removes the temporary profile, and never reads or writes a live browser profile. Use `--verify-manifest` only when supplying the matching manifest path explicitly.
+Firefox SQLite snapshots use the same command with a `Firefox_*.sqlite` path. The tool copies the selected snapshot into an isolated temporary location. Chromium verification validates roots, nodes, and GUIDs; Firefox verification validates SQLite integrity, the supported Places schema, and required bookmark roots. Both verify every file in the matching `Manifest_*` file, report counts, remove the temporary data, and never open a live browser profile. Use `--verify-manifest` only when supplying the matching manifest path explicitly.
 
 ### Catalog and compare backup sets
 
@@ -485,7 +485,7 @@ py .\browser_bookmark_sync.py `
 
 Catalog and comparison operations read only the selected backup directory. Firefox SQLite inspection uses immutable mode so it does not create WAL or shared-memory sidecars. These operations do not open live browser profiles or create, rename, replace, prune, or delete backup files.
 
-### Restore a JSON recovery snapshot
+### Restore a recovery snapshot
 
 Close the target browser, then restore it independently:
 
@@ -499,6 +499,18 @@ py .\browser_bookmark_sync.py `
 ```
 
 The current `Bookmarks` file is copied to a `Chrome_PreRestore_*` or `Edge_PreRestore_*` recovery file first. HTML backups must be imported through the browser.
+
+Restore a verified Firefox snapshot while Firefox is completely closed:
+
+```powershell
+py .\browser_bookmark_sync.py `
+  --restore-backup "D:\Browser Bookmark Backups\Firefox_2026-08-07_12-00-00_000001.sqlite" `
+  --restore-browser Firefox `
+  --firefox-profile "$env:APPDATA\Mozilla\Firefox\Profiles\PROFILE.default-release" `
+  --backup-dir "D:\Browser Bookmark Backups"
+```
+
+Firefox restore verifies the snapshot and manifest first, preserves the current database through SQLite's backup API, stages and validates the replacement, removes stale live WAL and shared-memory sidecars only at commit time, and retains the preserved database if replacement fails.
 
 ### Generate a Task Scheduler script
 
@@ -594,7 +606,7 @@ Backups and the HTML export are created before process termination. The command 
 | `--max-folder-changes` | No | Returns exit code `2` when newer folder additions and reorders exceed this aggregate count. |
 | `--check-automation` | AI or local scheduling | Validates a private automation configuration without creating backups or changing browser files. |
 | `--run-automation` | AI or local scheduling | Executes a private automation configuration under a concurrency lock and writes a privacy-safe JSON result. |
-| `--verify-backup` | Backup verification | Raw JSON recovery snapshot to validate without changing browser files. |
+| `--verify-backup` | Backup verification | Raw Chromium JSON or Firefox SQLite recovery snapshot to validate without changing browser files. |
 | `--verify-manifest` | No | Explicit matching manifest path for `--verify-backup`. |
 | `--catalog-backups` | Backup catalog | Groups generated backup files by timestamp and reports count-only status and changes. |
 | `--catalog-filter` | No | Filters the catalog by `all`, `complete`, `incomplete`, `valid`, or `invalid`. |
@@ -615,7 +627,7 @@ Backups and the HTML export are created before process termination. The command 
 | `--force` | No | Bypasses browser process detection during synchronization. It has no effect on export-only runs. |
 | `--close-browsers` | No | Force-terminates detected write-target browser process trees, verifies closure, then synchronizes. Cannot be combined with `--force`. |
 | `--restore-backup` | Restore | Raw JSON recovery snapshot to restore. |
-| `--restore-browser` | Restore | Target browser: `Chrome` or `Edge`. |
+| `--restore-browser` | Restore | Target browser: `Chrome`, `Edge`, or `Firefox`. |
 | `--log-file` | No | Overrides the private count-only log path. |
 | `--verbose` | No | Prints and logs additional count-only details. |
 | `--write-task-script` | Task generation | Destination PowerShell script. |
@@ -638,7 +650,7 @@ Manifest_YYYY-MM-DD_HH-MM-SS_microseconds.json
 browser-bookmark-tool.log
 ```
 
-The HTML file is the portable bookmark backup. It contains the merged collection and can be imported into browsers that support Netscape bookmark HTML. Chrome and Edge JSON files retain Chromium recovery metadata. `Firefox_*.sqlite` is a complete SQLite backup created through SQLite's backup API, including committed WAL data. The manifest records file names, sizes, SHA-256 hashes, and count-only operation data. The tool validates the manifest before retention pruning, can catalog and compare complete backup sets without changing them, and can independently verify a selected Chromium recovery snapshot against its matching manifest before restore.
+The HTML file is the portable bookmark backup. It contains the merged collection and can be imported into browsers that support Netscape bookmark HTML. Chrome and Edge JSON files retain Chromium recovery metadata. `Firefox_*.sqlite` is a complete SQLite backup created through SQLite's backup API, including committed WAL data. The manifest records file names, sizes, SHA-256 hashes, and count-only operation data. The tool validates the manifest before retention pruning, can catalog and compare complete backup sets without changing them, and can independently verify Chromium and Firefox recovery snapshots against their matching manifests before restore.
 
 Retention is applied separately to Chrome JSON recovery snapshots, Edge JSON recovery snapshots, Firefox SQLite recovery snapshots, merged HTML backups, and manifests. The tool accepts 1 through 50 backup sets and defaults to 50. Microsecond timestamps prevent repeated runs during the same second from overwriting earlier files. The append-only operation log and pre-restore recovery files are not pruned automatically.
 
@@ -674,7 +686,7 @@ Do not restore a Chrome backup into Edge or an Edge backup into Chrome unless yo
 - Automatic closure uses forceful process-tree termination and is available only through the explicit `--close-browsers` CLI option.
 - Chromium auto-detection is limited to standard `Default` and `Profile *` directory names. Firefox uses explicit `profiles.ini` entries.
 - Firefox export supports current Places schemas that contain the required bookmark, URL hash, GUID, timestamp, and Sync metadata columns. An unsupported schema fails before live replacement.
-- Firefox export adds missing URLs to a tool-owned folder. It does not mirror Chromium folder layout, propagate deletions, or provide direct Firefox restore. Preserve `Firefox_*.sqlite` for manual recovery while Firefox is closed.
+- Firefox export adds missing URLs to a tool-owned folder. It does not mirror Chromium folder layout or propagate deletions. Verified `Firefox_*.sqlite` snapshots can be restored while Firefox is closed.
 - Deletions are intentionally not synchronized.
 - Duplicate removal and alphabetization are disabled by default.
 - Direct restore requires JSON recovery snapshots. HTML restore uses the browser's import function.
@@ -736,7 +748,7 @@ The repository Actions allowlist still requires full commit SHA pinning. It perm
 
 The project is applying for SignPath Foundation service as a no-cost alternative. Do not add SignPath credentials, actions, or signing steps until the application is approved and SignPath supplies the project configuration. If accepted, replace the Azure-specific signing step in a reviewed pull request while preserving tag validation, manual signing approval, version-metadata enforcement, signature and timestamp checks, checksums, SBOM generation, provenance, and fail-closed publication. Update the repository Actions allowlist only for exact reviewed and full-SHA-pinned dependencies required by that integration.
 
-The current test suite contains 104 passing cases covering conservative and aggressive cross-browser URL matching, explicit Firefox profile discovery, Firefox Places import and export, Firefox backup ordering and manifests, three-browser rollback, disabled-mode isolation, five merge strategies, privacy-safe JSON and CSV dry-run reports, named multi-profile execution, read-only backup catalog and comparison, non-destructive backup verification, restore safety, Chromium schema checks, duplicate GUID rejection, SHA-256 manifests, manifest mismatch and path validation, privacy-safe logging, Task Scheduler generation, scheduler configuration, readiness, locking, structured results, health history, notification controls, organization, retention, transaction and process controls, CLI behavior, and GUI errors.
+The current test suite contains 142 passing cases covering cross-browser matching, Firefox Places import, export, isolated verification and restore, backup ordering and manifests, three-browser rollback, stale sidecars, corrupt and unsupported snapshots, five merge strategies, machine-readable previews and policies, backup cataloging, Chromium recovery, scheduling, automation, process controls, CLI behavior, and GUI errors.
 
 ## Contributing and support
 
