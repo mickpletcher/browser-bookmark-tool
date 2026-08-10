@@ -84,19 +84,6 @@ Acceptance criteria:
 - Synchronization still enforces browser-process safety per run.
 - Private mapping paths remain excluded from Git.
 
-### FUT-018: Firefox recovery verification and restore
-
-Add isolated verification and explicit restore for the raw Firefox SQLite recovery snapshots created by completed `FUT-006`.
-
-Implementation status: GUI and CLI verification and restore, manifest and schema validation, process blocking, current-database preservation, sidecar cleanup, rollback, automated failure coverage, and physical macOS copied-profile validation are implemented. Completion awaits physical Windows 11 validation.
-
-Acceptance criteria:
-
-- Verification runs against a temporary database copy, validates SQLite integrity and required Places roots, and never opens a live Firefox profile.
-- Restore requires Firefox to be closed, using platform-appropriate process detection, validates the selected snapshot and its manifest, and preserves the current `places.sqlite` before replacement.
-- WAL and shared-memory sidecars are handled without replaying stale data into the restored database.
-- GUI, CLI, and failure-path tests cover valid, corrupt, mismatched, and unsupported-schema snapshots.
-
 ### FUT-011: Safari backup and synchronization on macOS
 
 Add a separate macOS implementation for backing up, previewing, organizing, and synchronizing Safari bookmarks with supported Chromium browsers.
@@ -121,6 +108,18 @@ Acceptance criteria:
 - Apple notarization and stapling complete successfully before publication.
 - Verification checks the signature, hardened runtime, notarization ticket, package contents, and SHA-256 checksum.
 - Installation and Gatekeeper verification instructions are documented without weakening the source-based workflow.
+
+### FUT-025: Cross-platform recovery rehearsal
+
+Add a no-live-write recovery drill that verifies a complete backup set and restores its Chrome, Edge, and optional Firefox members into isolated temporary profiles.
+
+Acceptance criteria:
+
+- The rehearsal validates the complete manifest and restores every represented browser into a temporary directory only.
+- Chromium schemas, Firefox SQLite integrity and roots, counts, and expected browser membership are checked after restoration.
+- The command never opens, checkpoints, replaces, or creates sidecars beside live browser profiles.
+- A count-only result reports success or the failing recovery stage without bookmark titles, URLs, or private paths.
+- Tests cover complete, incomplete, corrupt, mismatched, and mixed-browser backup sets on Windows and macOS.
 
 ### FUT-014: Notification delivery verification and provider templates
 

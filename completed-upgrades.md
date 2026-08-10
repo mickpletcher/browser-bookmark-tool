@@ -129,3 +129,10 @@ The following capabilities were already complete when the upgrade tracking files
 - Release: Unreleased
 - Summary: Adds native macOS Chrome, Edge, and Firefox profile discovery, platform-specific process blocking and explicit closure, portable shell execution, backup-only `launchd` generation, macOS package metadata, and a SHA-pinned native CI build while preserving Windows behavior. Safari remains separate under `FUT-011`.
 - Verification: The 135-case suite covers macOS standard profile discovery, executable-name process detection, exact-name closure, platform-aware restore blocking, launchd generation, existing transactional and rollback paths, and all Windows regressions. Ruff, compilation, shell and CLI smoke tests, physical-Mac discovery and process checks, and a native PyInstaller executable smoke test pass.
+
+### FUT-018: Firefox recovery verification and restore
+
+- Completed: 2026-08-09
+- Release: Unreleased
+- Summary: Adds isolated Firefox SQLite snapshot verification and GUI and CLI restore with manifest, integrity, Places schema, and required-root validation; platform-native process blocking; consistent preservation of the current database; staged replacement; stale WAL and shared-memory cleanup; and rollback-safe failure handling.
+- Verification: The 142-case suite covers valid, corrupt, mismatched, unsupported-schema, running-process, stale-sidecar, replacement-failure, GUI, and CLI paths. Ruff, compilation, dependency, and shell smoke checks pass. Physical macOS copied-profile and Windows 11 validation both pass without changing the live macOS profile.
