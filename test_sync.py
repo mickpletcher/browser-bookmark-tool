@@ -1192,6 +1192,204 @@ def test_preview_report_options_reject_unsafe_or_incomplete_requests(
     assert "cannot be written inside a selected browser profile" in capsys.readouterr().err
 
 
+def comparison_entry(
+    name: str,
+    *,
+    final_bookmarks: int = 2,
+    planned_additions: int = 2,
+    duplicates_removed: int = 0,
+    folders_added: int = 0,
+    folders_reordered: int = 0,
+    merge_strategy: str = "chrome-wins",
+    details: bool = False,
+) -> dict:
+    entry = {
+        "mapping": name,
+        "settings": {
+            "merge_strategy": merge_strategy,
+            "duplicate_mode": "conservative",
+            "firefox_enabled": False,
+        },
+        "counts": {
+            "chrome_bookmarks": 1,
+            "edge_favorites": 1,
+            "firefox_bookmarks": 0,
+            "final_bookmarks": final_bookmarks,
+        },
+        "changes": {
+            "chrome_only_urls": planned_additions,
+            "edge_only_urls": 0,
+            "firefox_only_urls": 0,
+            "input_duplicates": duplicates_removed,
+            "duplicates_removed": duplicates_removed,
+            "folders_added": folders_added,
+            "folders_reordered": folders_reordered,
+        },
+    }
+    if details:
+        entry["bookmarks"] = [
+            {
+                "name": "Private comparison bookmark",
+                "url": "https://private-comparison.test/token=secret",
+                "folder_path": "Private folder",
+            }
+        ]
+    return entry
+
+
+def test_preview_report_comparison_matches_json_and_csv_mappings_and_reports_differences(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    older = tmp_path / "older.json"
+    newer = tmp_path / "newer.csv"
+    sync_module.write_preview_report(
+        older,
+        [comparison_entry("Personal"), comparison_entry("Removed")],
+    )
+    sync_module.write_preview_report(
+        newer,
+        [
+            comparison_entry(
+                "Personal",
+                final_bookmarks=5,
+                planned_additions=4,
+                duplicates_removed=2,
+                folders_added=1,
+                folders_reordered=1,
+                merge_strategy="merge-folders",
+            ),
+            comparison_entry("Added"),
+        ],
+    )
+
+    assert main(["--compare-preview-reports", str(older), str(newer)]) == 0
+    output = capsys.readouterr().out
+
+    assert "Removed: missing from newer report" in output
+    assert "Added: missing from older report" in output
+    assert "settings.merge_strategy: chrome-wins to merge-folders" in output
+    assert "counts.final_bookmarks: 2 to 5 (+3)" in output
+    assert "changes.duplicates_removed: 0 to 2 (+2)" in output
+    assert "changes.folders_reordered: 0 to 1 (+1)" in output
+    assert "No browser profiles, backups, or input reports were changed." in output
+
+
+def test_preview_report_comparison_policy_thresholds_return_exit_code_two(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    older = tmp_path / "older.json"
+    newer = tmp_path / "newer.json"
+    sync_module.write_preview_report(older, [comparison_entry("Personal")])
+    sync_module.write_preview_report(
+        newer,
+        [
+            comparison_entry(
+                "Personal",
+                planned_additions=5,
+                duplicates_removed=2,
+                folders_added=2,
+                folders_reordered=1,
+            )
+        ],
+    )
+    arguments = [
+        "--compare-preview-reports",
+        str(older),
+        str(newer),
+        "--max-planned-additions",
+        "5",
+        "--max-duplicate-removals",
+        "2",
+        "--max-folder-changes",
+        "3",
+    ]
+
+    assert main(arguments) == 0
+    assert "Policy gate passed." in capsys.readouterr().out
+    arguments[-1] = "2"
+    assert main(arguments) == 2
+    output = capsys.readouterr().out
+    assert "Policy gate failed: folder changes 3 exceeds 2." in output
+
+
+def test_preview_report_comparison_rejects_details_without_explicit_acknowledgment(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    older = tmp_path / "older-private.json"
+    newer = tmp_path / "newer-private.csv"
+    sync_module.write_preview_report(older, [comparison_entry("Personal", details=True)], True)
+    sync_module.write_preview_report(newer, [comparison_entry("Personal", details=True)], True)
+
+    arguments = ["--compare-preview-reports", str(older), str(newer)]
+    assert main(arguments) == 1
+    error = capsys.readouterr().err
+    assert "--acknowledge-private-preview-details" in error
+    assert "private-comparison.test" not in error
+
+    assert main([*arguments, "--acknowledge-private-preview-details"]) == 0
+    output = capsys.readouterr().out
+    assert "private-comparison.test" not in output
+    assert "Private comparison bookmark" not in output
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {
+            "schema_version": 2,
+            "kind": "preview-report",
+            "generated_at": "2026-08-09T00:00:00+00:00",
+            "bookmark_details_included": False,
+            "mappings": [comparison_entry("Personal")],
+        },
+        {
+            "schema_version": 1,
+            "kind": "preview-report",
+            "generated_at": "2026-08-09T00:00:00+00:00",
+            "bookmark_details_included": False,
+            "mappings": [comparison_entry("Personal"), comparison_entry("Personal")],
+        },
+    ],
+)
+def test_preview_report_comparison_rejects_unsupported_or_duplicate_json_schema(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    document: dict,
+):
+    invalid = tmp_path / "invalid.json"
+    valid = tmp_path / "valid.json"
+    invalid.write_text(json.dumps(document))
+    sync_module.write_preview_report(valid, [comparison_entry("Personal")])
+
+    assert main(["--compare-preview-reports", str(invalid), str(valid)]) == 1
+    assert "Error:" in capsys.readouterr().err
+
+
+def test_preview_report_comparison_reads_only_input_reports(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    directory = tmp_path / "reports"
+    older = directory / "older.json"
+    newer = directory / "newer.json"
+    sync_module.write_preview_report(older, [comparison_entry("Personal")])
+    sync_module.write_preview_report(newer, [comparison_entry("Personal", final_bookmarks=3)])
+    before = {path.name: path.read_bytes() for path in directory.iterdir()}
+    monkeypatch.setattr(
+        sync_module,
+        "preview_synchronization_data",
+        lambda *_args, **_kwargs: pytest.fail("browser profile opened"),
+    )
+    monkeypatch.setattr(sync_module, "prune_backups", lambda *_args, **_kwargs: pytest.fail("backup changed"))
+
+    assert main(["--compare-preview-reports", str(older), str(newer)]) == 0
+    after = {path.name: path.read_bytes() for path in directory.iterdir()}
+    assert after == before
+
+
 def test_manifest_validates_and_detects_tampering(tmp_path: Path):
     chrome = tmp_path / "Chrome" / "Default"
     edge = tmp_path / "Edge" / "Default"

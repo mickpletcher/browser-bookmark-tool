@@ -15,7 +15,7 @@ Version: 0.3.0
 
 Release readiness: Source ready; trusted signing credential required for binary release
 
-The GUI, CLI, standalone build, automated tests, transactional writes, machine-readable dry-run reporting, read-only backup-set catalog and comparison, non-destructive backup verification, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The current `main` branch passes Windows CI and CodeQL. Release automation fails closed unless a trusted provider signs and timestamps the executable, the workflow verifies the expected publisher and signature, and checksums, a CycloneDX SBOM, and GitHub provenance are published. The project is applying to the SignPath Foundation open-source program; the existing Azure-based workflow remains unchanged until SignPath approves the project and provides the required integration settings. No signing provider is currently configured, so broad binary distribution remains blocked. Native macOS Chrome and Edge compatibility and later Safari support are separate future upgrades and are not currently implemented.
+The GUI, CLI, standalone build, automated tests, transactional writes, machine-readable dry-run reporting, read-only preview-report and backup-set comparison, count-only policy gates, non-destructive backup verification, restore workflow, multi-profile mappings, backup integrity manifests, privacy-safe logging, Task Scheduler generation, vendor-neutral local AI scheduling, privacy-safe health history, and optional rate-limited failure notifications are implemented for Windows. The current `main` branch passes Windows CI and CodeQL. Release automation fails closed unless a trusted provider signs and timestamps the executable, the workflow verifies the expected publisher and signature, and checksums, a CycloneDX SBOM, and GitHub provenance are published. The project is applying to the SignPath Foundation open-source program; the existing Azure-based workflow remains unchanged until SignPath approves the project and provides the required integration settings. No signing provider is currently configured, so broad binary distribution remains blocked. Native macOS Chrome and Edge compatibility and later Safari support are separate future upgrades and are not currently implemented.
 
 - [Current assessment](assessment.md)
 - [Changelog](changelog.md)
@@ -52,6 +52,7 @@ The GUI, CLI, standalone build, automated tests, transactional writes, machine-r
 - Uses conservative URL matching by default and keeps aggressive matching opt-in.
 - Provides five merge strategies and a no-write dry-run report.
 - Writes optional atomic JSON or CSV dry-run reports with settings, counts, and change categories while excluding bookmark details by default.
+- Compares JSON and CSV preview reports by mapping without reopening browser profiles and can enforce aggregate count-only policy thresholds.
 - Verifies JSON recovery snapshots in a temporary Chromium profile without changing live browser files.
 - Restores Chrome or Edge independently from raw JSON recovery snapshots.
 - Saves and loads private named profile mappings and processes several mappings from the CLI.
@@ -337,6 +338,33 @@ Add `--include-bookmark-details` only when the private report must include merge
 
 Report generation reads the selected profiles and atomically creates or replaces only the requested report. It rejects destinations inside selected browser profiles and does not create backups, HTML exports, manifests, logs, or scheduler results. It never synchronizes browser files or invokes backup pruning. If any selected mapping fails, no report is written.
 
+Compare two version 1 reports without reopening browser profiles:
+
+```powershell
+py -m browser_bookmark_sync `
+  --compare-preview-reports `
+  "D:\Private\browser-bookmark-preview-before.json" `
+  "D:\Private\browser-bookmark-preview-after.csv"
+```
+
+JSON and CSV can be compared directly. Mappings are matched by name. Output lists settings, browser counts, planned URL additions, duplicate counts, and folder-change differences. It also reports mappings found in only one input. The comparison reads only the two reports and never changes them, opens browser profiles, or creates backups.
+
+Add optional count-only gates for local automation or CI:
+
+```powershell
+py -m browser_bookmark_sync `
+  --compare-preview-reports `
+  "D:\Private\browser-bookmark-preview-before.json" `
+  "D:\Private\browser-bookmark-preview-after.json" `
+  --max-planned-additions 25 `
+  --max-duplicate-removals 10 `
+  --max-folder-changes 5
+```
+
+The policy counts come from the newer report and are aggregated across its mappings. Exit code `0` means the comparison and configured gates passed. Exit code `1` means an input, schema, or option was invalid. Exit code `2` means at least one threshold was exceeded.
+
+Detailed reports are rejected by default. Add `--acknowledge-private-preview-details` only after confirming both inputs may be processed locally. The comparison still prints count-only output and never prints bookmark names, URLs, or folder paths.
+
 ### Include Firefox
 
 Firefox stays disabled unless an explicit profile is supplied. This command imports Firefox into the merged union and writes Chrome and Edge only:
@@ -503,6 +531,11 @@ Backups and the HTML export are created before process termination. The command 
 | `--dry-run` | No | Reports planned counts and folder changes without changing browser or backup files. |
 | `--preview-report` | Dry run report | Writes all selected mapping previews to a `.json` or `.csv` file; requires `--dry-run`. |
 | `--include-bookmark-details` | No | Explicitly includes private bookmark names, URLs, and folder paths in `--preview-report`. |
+| `--compare-preview-reports` | Preview comparison | Older and newer version 1 JSON or CSV reports to compare by mapping. |
+| `--acknowledge-private-preview-details` | No | Allows local comparison of detailed reports while keeping output count-only. |
+| `--max-planned-additions` | No | Returns exit code `2` when newer URL additions exceed this aggregate count. |
+| `--max-duplicate-removals` | No | Returns exit code `2` when newer duplicate removals exceed this aggregate count. |
+| `--max-folder-changes` | No | Returns exit code `2` when newer folder additions and reorders exceed this aggregate count. |
 | `--check-automation` | AI or local scheduling | Validates a private automation configuration without creating backups or changing browser files. |
 | `--run-automation` | AI or local scheduling | Executes a private automation configuration under a concurrency lock and writes a privacy-safe JSON result. |
 | `--verify-backup` | Backup verification | Raw JSON recovery snapshot to validate without changing browser files. |
@@ -557,7 +590,7 @@ Retention is ordered by the timestamp in each generated filename. It does not re
 
 ## Privacy and security
 
-Bookmark files, Firefox `places.sqlite` databases, backups, profile mappings, automation configurations, and private scheduler outputs can expose browsing history, internal URLs, access tokens embedded in URLs, usernames, and private filesystem paths. Store them outside the repository and do not attach real data to issues, prompts, pull requests, or cloud artifacts. The project `.gitignore` blocks browser bookmark files, generated backups, logs, restore snapshots, task scripts, private profile mappings, automation results, health histories, and lock files as a secondary safeguard. Notification commands must obtain credentials from a private local mechanism instead of command arguments. Only the sanitized mapping and automation examples belong in Git.
+Bookmark files, Firefox `places.sqlite` databases, backups, preview reports, profile mappings, automation configurations, and private scheduler outputs can expose browsing history, internal URLs, access tokens embedded in URLs, usernames, and private filesystem paths. Store them outside the repository and do not attach real data to issues, prompts, pull requests, or cloud artifacts. Detailed preview comparison requires an explicit acknowledgment and still emits count-only output. The project `.gitignore` blocks browser bookmark files, generated backups, standard preview report names, logs, restore snapshots, task scripts, private profile mappings, automation results, health histories, and lock files as a secondary safeguard. Notification commands must obtain credentials from a private local mechanism instead of command arguments. Only the sanitized mapping and automation examples belong in Git.
 
 Report security vulnerabilities privately through GitHub. See the [security policy](SECURITY.md) for the reporting process and evidence requirements.
 

@@ -101,3 +101,10 @@ The following capabilities were already complete when the upgrade tracking files
 - Release: Unreleased
 - Summary: Adds optional atomic JSON and CSV output for direct and multi-mapping dry runs. Versioned default reports contain only settings, counts, and change categories. The explicit `--include-bookmark-details` option adds merged bookmark names, URLs, and folder paths, while report destinations inside selected browser profiles are rejected.
 - Verification: The 104-case suite covers default JSON privacy, explicit JSON details, default and detailed CSV schemas, multi-mapping aggregation, unsupported extensions, unsafe browser-profile destinations, option dependencies, exact browser-file preservation, absent backup directories, and a fail-on-call backup-pruning guard. Ruff and Python compilation pass.
+
+### FUT-020: Preview report comparison and policy gates
+
+- Completed: 2026-08-09
+- Release: Unreleased
+- Summary: Adds read-only comparison of version 1 JSON and CSV preview reports matched by mapping name. Count-only output covers settings, browser counts, planned additions, duplicates, and folder changes. Optional aggregate thresholds return exit code `2`, while detailed reports require an explicit private-data acknowledgment and still never print bookmark details.
+- Verification: The 110-case suite covers cross-format schema validation, missing and duplicate mappings, settings and count changes, passing and failing policy thresholds, detailed-report rejection and acknowledgment, count-only output, and exact before-and-after input-directory equality. Ruff and Python compilation pass.
