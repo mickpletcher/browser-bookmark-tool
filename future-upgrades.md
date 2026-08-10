@@ -91,22 +91,22 @@ Add isolated verification and explicit restore for the raw Firefox SQLite recove
 Acceptance criteria:
 
 - Verification runs against a temporary database copy, validates SQLite integrity and required Places roots, and never opens a live Firefox profile.
-- Restore requires `firefox.exe` to be closed, validates the selected snapshot and its manifest, and preserves the current `places.sqlite` before replacement.
+- Restore requires Firefox to be closed, using platform-appropriate process detection, validates the selected snapshot and its manifest, and preserves the current `places.sqlite` before replacement.
 - WAL and shared-memory sidecars are handled without replaying stale data into the restored database.
 - GUI, CLI, and failure-path tests cover valid, corrupt, mismatched, and unsupported-schema snapshots.
 
-### FUT-013: macOS Chrome and Edge compatibility
+### FUT-013: macOS Chrome, Edge, and Firefox compatibility
 
-Make the existing Chrome and Edge backup, preview, organization, restore, and synchronization workflow run natively on macOS before adding Safari support.
+Make the existing Chrome, Edge, and optional Firefox backup, preview, organization, restore, and synchronization workflow run natively on macOS before adding Safari support.
 
 Acceptance criteria:
 
 - Platform adapters isolate browser profile discovery, process detection, browser closure, scheduling, launchers, and packaging without changing verified Windows behavior.
-- Chrome and Microsoft Edge profiles are discovered from supported macOS locations, with explicit paths still available for nonstandard profiles.
-- Backup, dry-run, HTML export, restore, deduplication, alphabetization, and transactional synchronization pass on a physical Mac.
-- Browser-process safeguards detect Chrome and Edge on macOS, block writes by default, and test any explicit closure option without weakening rollback guarantees.
+- Chrome, Microsoft Edge, and Firefox profiles are discovered from supported macOS locations, with explicit paths still available for nonstandard profiles.
+- Backup, dry-run, HTML export, restore, deduplication, alphabetization, and transactional synchronization for Chrome, Edge, and enabled Firefox profiles pass on a physical Mac.
+- Browser-process safeguards detect Chrome, Edge, and enabled Firefox write targets on macOS, block writes by default, and test any explicit closure option without weakening rollback guarantees.
 - A portable `python3` or shell entrypoint and documented `launchd`, Codex, Claude, and Copilot scheduling paths replace Windows-only launcher assumptions on macOS.
-- macOS CI runs the automated suite and performs a native packaging smoke test, while physical Mac validation covers local browser files and permissions that CI cannot reproduce.
+- macOS CI runs the automated Chrome, Edge, and Firefox suite and performs a native packaging smoke test, while physical Mac validation covers local browser files and permissions that CI cannot reproduce.
 - Safari remains outside this upgrade and is implemented separately under `FUT-011` after the shared macOS platform layer is stable.
 
 ### FUT-011: Safari backup and synchronization on macOS
