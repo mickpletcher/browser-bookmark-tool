@@ -31,6 +31,7 @@ The GUI, CLI, transactional workflow, browser safeguards, shell and PowerShell e
 
 - Detects Chrome and Edge `Default` and `Profile *` profiles and parses the standard Firefox `profiles.ini` on Windows and macOS.
 - Discovers `~/Library/Safari/Bookmarks.plist` on macOS, validates the supported version 1 schema, excludes Reading List, and imports bookmarks read-only.
+- Prepares validated portable HTML and gives explicit steps for Safari's user-controlled **File > Import From > Bookmarks HTML File** workflow without automating or editing Safari.
 - Creates timestamped copies of both original `Bookmarks` JSON files.
 - Exports the merged bookmark collection to portable Netscape bookmark HTML.
 - Synchronizes unique bookmarks between Chrome and Edge when requested.
@@ -596,6 +597,7 @@ Backups and the HTML export are created before process termination. The command 
 | `--gui` | No | Opens the desktop interface. |
 | `--sync` | No | Writes the merged bookmarks to Chrome and Edge. Without it, the run only backs up and exports. |
 | `--dry-run` | No | Reports planned counts and folder changes without changing browser or backup files. |
+| `--prepare-safari-import` | No | On macOS, creates the validated backup/export set and prints manual Safari HTML-import steps without changing Safari. |
 | `--preview-report` | Dry run report | Writes all selected mapping previews to a `.json` or `.csv` file; requires `--dry-run`. |
 | `--include-bookmark-details` | No | Explicitly includes private bookmark names, URLs, and folder paths in `--preview-report`. |
 | `--compare-preview-reports` | Preview comparison | Older and newer version 1 JSON or CSV reports to compare by mapping. |
@@ -639,6 +641,10 @@ Backups and the HTML export are created before process termination. The command 
 | `--task-sync` | No | Explicitly makes a generated task synchronize instead of backup only. |
 
 If no CLI operation is supplied, the application opens the GUI. Direct CLI operations require both profile arguments unless a profile map supplies them.
+
+### Guided Safari import
+
+The GUI's **Prepare Safari Import** button and CLI `--prepare-safari-import` operation create the normal validated backup set and merged HTML file, then identify Safari's manual import command. They do not launch an import, click Safari, edit `Bookmarks.plist`, or write through an undocumented API. In Safari, choose **File > Import From > Bookmarks HTML File**, select the generated HTML file, review the imported folder, and keep or undo the change yourself. The imported bookmarks may synchronize through iCloud.
 
 ## Backup files
 
@@ -752,7 +758,7 @@ The repository Actions allowlist still requires full commit SHA pinning. It perm
 
 The project is applying for SignPath Foundation service as a no-cost alternative. Do not add SignPath credentials, actions, or signing steps until the application is approved and SignPath supplies the project configuration. If accepted, replace the Azure-specific signing step in a reviewed pull request while preserving tag validation, manual signing approval, version-metadata enforcement, signature and timestamp checks, checksums, SBOM generation, provenance, and fail-closed publication. Update the repository Actions allowlist only for exact reviewed and full-SHA-pinned dependencies required by that integration.
 
-The current test suite contains 152 passing cases covering read-only Safari discovery, parsing, backup, merge/export, privacy, GUI/CLI behavior, cross-browser matching, Firefox Places import/export/recovery, backup ordering and manifests, rollback, five merge strategies, preview policies, scheduling, automation, and existing-platform regressions.
+The current test suite contains 154 passing cases covering read-only Safari discovery, parsing, backup, merge/export, guided import preparation, privacy, GUI/CLI behavior, cross-browser matching, Firefox Places import/export/recovery, backup ordering and manifests, rollback, five merge strategies, preview policies, scheduling, automation, and existing-platform regressions.
 
 ## Contributing and support
 

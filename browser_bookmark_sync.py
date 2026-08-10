@@ -129,6 +129,16 @@ def default_backup_dir() -> Path:
     return Path.home() / "Documents" / "Browser Bookmark Backups"
 
 
+def safari_import_instructions(html_path: Path) -> str:
+    return (
+        "Safari import package prepared; Safari was not changed.\n"
+        f"HTML file: {html_path}\n"
+        "In Safari, choose File > Import From > Bookmarks HTML File, select this file, "
+        "review the imported folder, and keep or undo the import yourself. "
+        "Safari bookmarks may synchronize through iCloud."
+    )
+
+
 def browser_user_data(browser: str) -> Path:
     if is_macos():
         relative = {
@@ -3559,6 +3569,7 @@ class App(ttk.Frame):
         buttons.grid(row=12, column=0, columnspan=3, sticky="ew")
         ttk.Button(buttons, text="Preview Changes", command=self._preview).pack(side="left")
         ttk.Button(buttons, text="Back Up + Export HTML", command=lambda: self._run(False)).pack(side="left")
+        ttk.Button(buttons, text="Prepare Safari Import", command=lambda: self._run(False, True)).pack(side="left", padx=8)
         ttk.Button(buttons, text="Back Up + Sync", command=lambda: self._run(True)).pack(side="left", padx=8)
         ttk.Button(buttons, text="Open Backup Folder", command=self._open_backups).pack(side="left")
         management = ttk.Frame(self)
@@ -3626,10 +3637,13 @@ class App(ttk.Frame):
         if chosen:
             self.backups.set(chosen)
 
-    def _run(self, write: bool) -> None:
+    def _run(self, write: bool, prepare_safari_import: bool = False) -> SyncResult | None:
+        if prepare_safari_import and not is_macos():
+            messagebox.showerror(APP_NAME, "Guided Safari import is available only on macOS.")
+            return None
         if not self.chrome.get() or not self.edge.get():
             messagebox.showerror(APP_NAME, "Chrome and Edge profiles are required.")
-            return
+            return None
         firefox_enabled = bool(getattr(self, "firefox_enabled", None) and self.firefox_enabled.get())
         firefox_export = bool(getattr(self, "firefox_export", None) and self.firefox_export.get())
         firefox_profile = Path(self.firefox.get()) if firefox_enabled and self.firefox.get() else None
@@ -3638,13 +3652,13 @@ class App(ttk.Frame):
         safari_bookmarks = Path(safari_value) if safari_enabled and safari_value else None
         if firefox_enabled and firefox_profile is None:
             messagebox.showerror(APP_NAME, "A Firefox profile is required when Firefox support is enabled.")
-            return
+            return None
         if firefox_export and not firefox_enabled:
             messagebox.showerror(APP_NAME, "Enable Firefox before selecting Write to Firefox.")
-            return
+            return None
         if safari_enabled and safari_bookmarks is None:
             messagebox.showerror(APP_NAME, "Safari bookmarks are required when Safari support is enabled.")
-            return
+            return None
         browser_names = "Chrome, Edge, and Firefox" if firefox_export else "Chrome and Edge"
         if write and not messagebox.askyesno(APP_NAME, f"Are {browser_names} completely closed?\n\nBookmark data will be synchronized after backups are created."):
             return
@@ -3670,10 +3684,18 @@ class App(ttk.Frame):
             if result.alphabetized:
                 details.append("Alphabetized folders and bookmarks.")
             details.append(f"HTML: {result.html_path}")
+            if prepare_safari_import:
+                details.append("Safari was not changed; complete the import manually in Safari.")
+                webbrowser.open(result.backup_dir.as_uri())
             self.status.set(" ".join(details))
-            messagebox.showinfo(APP_NAME, self.status.get())
+            messagebox.showinfo(
+                APP_NAME,
+                safari_import_instructions(result.html_path) if prepare_safari_import else self.status.get(),
+            )
+            return result
         except Exception as exc:
             messagebox.showerror(APP_NAME, str(exc))
+            return None
 
     def _preview(self) -> None:
         if not self.chrome.get() or not self.edge.get():
@@ -3844,6 +3866,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Preview changes without browser or backup writes",
     )
     operation_options.add_argument(
+        "--prepare-safari-import",
+        action="store_true",
+        help="Create validated HTML and print user-controlled Safari import steps without changing Safari",
+    )
+    operation_options.add_argument(
         "--check-automation",
         type=Path,
         help="Validate a private scheduler configuration without changing browser files",
@@ -3986,6 +4013,7 @@ def main(argv: list[str] | None = None) -> int:
             args.write_task_script,
             args.write_launchd_plist,
             args.dry_run,
+            args.prepare_safari_import,
             args.sync,
             args.check_automation,
             args.run_automation,
@@ -4162,6 +4190,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
+        if args.prepare_safari_import and not is_macos():
+            raise RuntimeError("Guided Safari import is available only on macOS.")
         safari_enabled = args.enable_safari or args.safari_bookmarks is not None
         if safari_enabled and not is_macos():
             raise RuntimeError("Safari bookmark support is available only on macOS.")
@@ -4349,6 +4379,8 @@ def main(argv: list[str] | None = None) -> int:
                 ]
             )
             print("\n".join(output))
+            if args.prepare_safari_import:
+                print(safari_import_instructions(result.html_path))
             if args.verbose:
                 print(result.preview.render())
         if index < len(mappings) - 1:

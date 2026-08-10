@@ -3155,3 +3155,47 @@ def test_safari_gui_discovers_read_only_source_without_enabling_it(tmp_path: Pat
         assert app.safari_enabled.get() is False
     finally:
         root.destroy()
+
+
+def test_cli_prepares_user_controlled_safari_import_without_writing_safari(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    chrome = tmp_path / "Chrome"
+    edge = tmp_path / "Edge"
+    chrome.mkdir()
+    edge.mkdir()
+    (chrome / "Bookmarks").write_text(json.dumps(data("https://chrome.test")))
+    (edge / "Bookmarks").write_text(json.dumps(data("https://edge.test")))
+    safari = write_safari_plist(tmp_path / "live" / "Bookmarks.plist")
+    before = safari.read_bytes()
+    monkeypatch.setattr(sync_module, "is_macos", lambda: True)
+
+    assert main(
+        [
+            "--prepare-safari-import",
+            "--chrome-profile",
+            str(chrome),
+            "--edge-profile",
+            str(edge),
+            "--safari-bookmarks",
+            str(safari),
+            "--backup-dir",
+            str(tmp_path / "backups"),
+        ]
+    ) == 0
+
+    output = capsys.readouterr().out
+    assert "Safari was not changed" in output
+    assert "File > Import From > Bookmarks HTML File" in output
+    assert "iCloud" in output
+    assert safari.read_bytes() == before
+
+
+def test_gui_guided_safari_import_rejects_unsupported_platform(monkeypatch: pytest.MonkeyPatch):
+    app = object.__new__(App)
+    errors: list[tuple[str, str]] = []
+    monkeypatch.setattr(sync_module, "is_macos", lambda: False)
+    monkeypatch.setattr(sync_module.messagebox, "showerror", lambda title, message: errors.append((title, message)))
+
+    assert App._run(app, False, True) is None
+    assert errors == [(sync_module.APP_NAME, "Guided Safari import is available only on macOS.")]
