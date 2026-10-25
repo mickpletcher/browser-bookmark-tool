@@ -6,6 +6,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ## [Unreleased]
 
+### Documentation
+
+- Clarified the Tcl/Tk-enabled Python prerequisite for both CLI and GUI startup, separated ordinary macOS installation from developer extras, and added repository-root steps to editable-install examples. Static source and packaging checks only; no application behavior or release-readiness changes.
+
 ### Added
 
 - Added `FUT-025` cross-platform recovery rehearsal through `--rehearse-recovery`, with complete manifest and browser-membership validation plus isolated Chrome, Edge, optional Firefox, and Safari restoration.

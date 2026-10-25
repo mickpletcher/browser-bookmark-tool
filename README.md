@@ -136,7 +136,7 @@ Use **Back Up + Export HTML** first if you want to inspect the merged result wit
 ## Requirements
 
 - Windows 11 or a supported macOS version.
-- Python 3.10 or newer.
+- Python 3.10 or newer with working `tkinter` and Tcl/Tk support. This is required for both GUI and CLI use, including `--help`, because the program imports `tkinter` before parsing arguments.
 - The `py` launcher on Windows or `python3` on macOS.
 - Read and write access to the selected browser profiles and backup directory.
 
@@ -150,8 +150,6 @@ On macOS:
 
 ```bash
 python3 --version
-python3 -m pip install -e '.[dev]'
-./run-browser-bookmark-tool.sh --help
 ```
 
 The shell launcher runs the checked-out source with `python3`. macOS may request access to browser profile or backup folders. Grant only the filesystem access needed for the selected profiles and destination.
@@ -166,11 +164,24 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 
 ## Install the application
 
+First enter the downloaded or cloned repository root, the directory containing `pyproject.toml`. The examples below start in its parent directory and assume the folder is named `browser-bookmark-tool`; adjust the folder name for your checkout or extracted archive.
+
 Install the project in editable mode from PowerShell:
 
 ```powershell
+cd browser-bookmark-tool
 py -m pip install -e .
 ```
+
+On macOS:
+
+```bash
+cd browser-bookmark-tool
+python3 -m pip install -e .
+./run-browser-bookmark-tool.sh --help
+```
+
+Ordinary use does not require the `dev` extra. Developer setup is documented below.
 
 The installation provides the `browser-bookmark-tool` console command. Some Python installations do not add their `Scripts` directory to `PATH`. The documented `py -m browser_bookmark_sync` commands and the batch launcher work without that PATH entry.
 
@@ -731,12 +742,22 @@ Track fixes and release-readiness changes in the [assessment](assessment.md) and
 
 ## Development
 
-Run the test suite:
+For development, enter the repository root and install the `dev` extra, which includes pytest, PyInstaller, and Ruff. As in the installation examples, adjust the folder name if needed; omit `cd` if already in the repository root.
 
 ```powershell
+cd browser-bookmark-tool
 py -m pip install -e ".[dev]"
 py -m pytest -q
 py -m ruff check .
+```
+
+On macOS:
+
+```bash
+cd browser-bookmark-tool
+python3 -m pip install -e '.[dev]'
+python3 -m pytest -q
+python3 -m ruff check .
 ```
 
 Run a syntax check:
