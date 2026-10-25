@@ -95,6 +95,12 @@ No open medium findings.
 
 ## Verification snapshot
 
+### README setup clarification — 2026-10-25
+
+Static source and packaging review confirmed that `tkinter` is imported before CLI argument parsing, ordinary use does not require the optional `dev` dependencies, and editable installation must run from the repository root. README setup instructions now state these requirements and separate ordinary macOS use from developer setup. This documentation-only check did not install dependencies, run the application or browser commands, or access browser profiles. Runtime setup and platform coverage were not revalidated; existing release/signing gates remain unchanged.
+
+### Prior runtime verification — 2026-08-10
+
 Verified on Windows 11 with Python 3.13.3 on 2026-08-10.
 
 - `py -m pip install -e .`: passed.
