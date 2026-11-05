@@ -28,3 +28,7 @@ Support is best effort. There is no guaranteed response time.
 ## Security reports
 
 Do not open a public issue for a vulnerability. Follow [SECURITY.md](SECURITY.md).
+
+## Accessibility feedback
+
+See [ACCESSIBILITY.md](ACCESSIBILITY.md) for limitations, reporting guidance, and the accessibility issue form.

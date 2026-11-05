@@ -8,6 +8,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Documentation
 
+- Added accessibility status, a privacy-conscious issue form, and contributor/PR guidance without asserting unverified conformance.
+- Expanded README badges for Python, supported platforms, beta status, license, and accessibility documentation; scoped CI to main-branch pushes.
+
 - Clarified the Tcl/Tk-enabled Python prerequisite for both CLI and GUI startup, separated ordinary macOS installation from developer extras, and added repository-root steps to editable-install examples. Static source and packaging checks only; no application behavior or release-readiness changes.
 
 ### Added

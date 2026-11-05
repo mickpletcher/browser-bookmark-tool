@@ -1,9 +1,13 @@
 # Browser Bookmark Tool
 
-![Browser Bookmark Tool — Windows and macOS with read-only Safari support](.github/social-preview.jpg?v=20260810)
-
-[![Cross-platform CI](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml)
+[![Cross-platform CI](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/mickpletcher/browser-bookmark-tool/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush)
+[![Python: 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+[![Platforms: Windows and macOS](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS-blue.svg)](#project-status)
+[![Status: Beta](https://img.shields.io/badge/status-beta-yellow.svg)](#project-status)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Accessibility: documented](https://img.shields.io/badge/accessibility-documented-blue.svg)](ACCESSIBILITY.md)
+
+![Browser Bookmark Tool — Windows and macOS with read-only Safari support](.github/social-preview.jpg?v=20260810)
 
 Browser Bookmark Tool is a Windows and macOS desktop and command-line application for backing up, exporting, and synchronizing bookmarks between Google Chrome and Microsoft Edge, with optional Firefox import/export and read-only Safari import on macOS.
 
@@ -30,6 +34,9 @@ Safari is not a synchronization write target. The tool does not modify `Bookmark
 - [Completed upgrades](completed-upgrades.md)
 - [Scheduled AI execution](SCHEDULING.md)
 - [Contributing](CONTRIBUTING.md)
+- [Accessibility status and feedback](ACCESSIBILITY.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
+- [Security policy](SECURITY.md)
 - [Support](SUPPORT.md)
 - [Privacy policy](PRIVACY.md)
 - [Code signing policy](CODE_SIGNING_POLICY.md)
