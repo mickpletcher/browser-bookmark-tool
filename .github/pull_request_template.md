@@ -17,3 +17,8 @@ Describe the change and why it is needed.
 - [ ] Backup-first and no-deletion synchronization behavior is preserved or explicitly documented
 - [ ] Safari remains read-only unless a separately reviewed design explicitly changes that safety boundary
 - [ ] README, assessment, changelog, and upgrade tracking were updated where required
+
+## Accessibility
+
+- [ ] Reviewed ACCESSIBILITY.md for relevant interface or documentation changes
+- [ ] Recorded checks performed, known barriers, and untested combinations (or explained why not applicable)

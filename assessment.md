@@ -8,6 +8,10 @@ Release readiness: Source ready; trusted signing credential required for binary 
 
 The project is a Windows and macOS application for previewing, reporting, backing up, exporting, cataloging, comparing, verifying, rehearsing recovery, restoring, and organizing Chrome bookmarks and Microsoft Edge favorites, with disabled-by-default Firefox import and export. Version 0.3.0 combines transactional write and platform-native browser-process protections with privacy-safe machine-readable previews, isolated backup recovery, local scheduling, and native CI smoke builds. Windows signed distribution still requires a trusted provider. macOS distribution is source-ready but requires Developer ID signing and Apple notarization before public binaries are published.
 
+## Community accessibility review (2026-11-05)
+
+GitHub reports 100% community-profile health and private vulnerability reporting is enabled. Accessibility documentation, an issue form, and contributor review guidance are provided. No independent accessibility audit or screen-reader compatibility verification has been completed; see [ACCESSIBILITY.md](ACCESSIBILITY.md). These documentation changes do not change application behavior or binary release readiness.
+
 ## Current status
 
 | Area | Status | Notes |

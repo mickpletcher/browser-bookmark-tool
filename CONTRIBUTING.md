@@ -28,6 +28,10 @@ Run the standalone build when a change affects packaging, startup, or command-li
 .\dist\BrowserBookmarkTool.exe --help
 ```
 
+## Accessibility
+
+Follow [ACCESSIBILITY.md](ACCESSIBILITY.md) for interface and documentation changes. Record keyboard, scaling, and assistive-technology checks actually performed, including known barriers and untested behavior. Do not claim conformance from functional tests alone.
+
 ## Dependency updates
 
 Dependabot groups Python and GitHub Actions updates into weekly pull requests. Review Ruff release notes and the resulting lint output before changing the allowed Ruff range or enabled rules. Keep every action pinned to a full commit SHA and update its version comment with the pin.
